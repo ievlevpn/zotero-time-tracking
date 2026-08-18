@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+	<rect width="64" height="64" rx="14" fill="#c0392b"/>
+	<circle cx="32" cy="33" r="19" fill="#fdf6ec"/>
+	<circle cx="32" cy="33" r="19" fill="none" stroke="#8e2a20" stroke-width="2"/>
+	<!-- ticks at 12/3/6/9 -->
+	<g stroke="#8e2a20" stroke-width="2" stroke-linecap="round">
+		<path d="M32 18v3M47 33h-3M32 48v-3M17 33h3"/>
+	</g>
+	<!-- hands at 10:10 -->
+	<g stroke="#c0392b" stroke-width="3" stroke-linecap="round">
+		<path d="M32 33V22"/>
+		<path d="M32 33l7 5"/>
+	</g>
+	<circle cx="32" cy="33" r="2" fill="#8e2a20"/>
+	<!-- stalk, for the pomodoro -->
+	<path d="M32 14c-4-1-7-3-8-6 4 0 7 1 8 3 1-2 4-3 8-3-1 3-4 5-8 6z" fill="#3f8f4e"/>
+</svg>
