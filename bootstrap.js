@@ -18,15 +18,19 @@
 const FOCUS_MIN = 25;
 const BREAK_MIN = 5;
 
-const MAX_SESSION = 6 * 3600;  // seconds of counted time before we ask if you're still there
+const CHECK_IN = 3600;    // seconds of counted time between "still reading?" prompts
 const FLUSH_EVERY = 60;   // seconds between DB writes while a timer runs
 const MAX_STEP = 5;       // seconds; longer gaps mean the machine slept
 const DAY = 86400000;
 
+let active = false;       // between startup() and shutdown()
 let onRenderToolbar;
-let infoRowID = null;     // both IDs come back namespaced with the plugin ID
-let columnKey = null;
-let db = null;            // Zotero.DBConnection for time-tracker.sqlite
+let infoRowID = null;     // registration IDs come back namespaced with the
+let columnKey = null;     // plugin ID, so keep what register*() returns
+let menuID = null;
+let itemMenuID = null;
+let db = null;            // the usable connection, or null
+let dbConn = null;        // every connection we open, usable or not — see openDB()
 const log = [];           // every session row, mirrored from the DB
 let timer = null;         // the single active timer, or null — see start()
 let ticker = null;        // setInterval handle, alive only while a timer exists
@@ -95,16 +99,41 @@ const COLS = ["id", "libraryID", "itemKey", "title", "mode", "started", "seconds
 // keeps Zotero from treating it like the library — no WAL, no idle backups, no
 // "Checking database integrity…" dialog on the next launch after a force-quit,
 // and no corruption handler that could interrupt startup over a time log.
+//
+// `dbConn` tracks the connection from the moment it exists; `db` is only set
+// once it's usable. They are separate because Gecko's Sqlite.sys.mjs holds a
+// shutdown blocker that "waits for all connections to be closed before
+// shutdown" — an open connection nobody has a reference to hangs Zotero's quit
+// forever, and a killed Zotero loses the add-on state it hadn't flushed yet.
+// So: every connection we open must be reachable by closeDB(), always.
 async function openDB() {
+	if (dbConn) await closeDB();   // never run two connections at once
 	const conn = new Zotero.DBConnection(Zotero.DataDirectory.getDatabase("time-tracker"));
-	// Drop any WAL left by an earlier version: one writer, tiny writes, and no
-	// stray -wal/-shm files to confuse `sqlite3` while Zotero is running.
-	await conn.queryAsync("PRAGMA journal_mode = DELETE");
-	for (const sql of SCHEMA) await conn.queryAsync(sql);
-	for (const row of await conn.queryAsync("SELECT * FROM sessions ORDER BY started")) {
-		log.push(Object.fromEntries(COLS.map((c) => [c, row[c]])));  // rows are proxies
+	dbConn = conn;
+	log.length = 0;   // a reopen must not double every session
+	try {
+		// Best effort: an old version's leftover -wal can make this fail with
+		// SQLITE_BUSY, and that must not take the rest of the open down with it.
+		await conn.queryAsync("PRAGMA journal_mode = DELETE").catch(oops);
+		for (const sql of SCHEMA) await conn.queryAsync(sql);
+		for (const row of await conn.queryAsync("SELECT * FROM sessions ORDER BY started")) {
+			log.push(Object.fromEntries(COLS.map((c) => [c, row[c]])));  // rows are proxies
+		}
 	}
-	db = conn;  // only once it's usable, so everything else can just check `db`
+	catch (e) {
+		await closeDB();
+		throw e;
+	}
+	if (!active) return closeDB();   // shut down while we were opening
+	db = conn;                       // only now can anything else use it
+	refreshViews();
+	paint();
+}
+
+async function closeDB() {
+	const conn = dbConn;
+	db = dbConn = null;
+	if (conn) await conn.closeDatabase().catch(oops);
 }
 
 const oops = (e) => Zotero.logError(e);
@@ -119,9 +148,24 @@ function safe(fn, fallback) {
 const idOf = (item) => item.libraryID + "/" + item.key;
 
 // Modal, on purpose: both callers are guardrails, and a notification you can
-// miss is not a guardrail. Falls back to "no" if the prompt can't be shown.
+// miss is not a guardrail. But never without a window to parent it to — a
+// parentless modal can end up invisible and block the app from ever quitting,
+// and a quit that never finishes is the next launch failing. No window means
+// "no", which stops the timer rather than leaving it running.
 function confirm(text) {
-	return safe(() => Services.prompt.confirm(Zotero.getMainWindow(), "Reading time", text), false);
+	const win = Zotero.getMainWindow();
+	if (!win) return false;
+	return safe(() => Services.prompt.confirm(win, "Reading time", text), false);
+}
+
+// Same rules as confirm(), but with an editable value. Returns null on cancel.
+function promptValue(text, initial) {
+	const win = Zotero.getMainWindow();
+	if (!win) return null;
+	return safe(() => {
+		const out = { value: initial };
+		return Services.prompt.prompt(win, "Reading time", text, out, null, {}) ? out.value : null;
+	}, null);
 }
 
 // Pure, so test.js can exercise it: total seconds in `rows`, optionally
@@ -203,7 +247,7 @@ function start(mode, item) {
 	}
 	if (timer) stop();  // flush the old one first
 	timer = {
-		id: idOf(item), mode, row: addRow(item, mode, 0), capAt: MAX_SESSION,
+		id: idOf(item), mode, row: addRow(item, mode, 0), capAt: CHECK_IN,
 		counted: 0, running: true, segStart: Date.now(),
 		phase: "focus", phaseElapsed: 0,
 	};
@@ -221,11 +265,11 @@ function setPaused(paused) {
 	refreshViews();
 }
 
-function stop() {
+function stop(discard) {
 	if (!timer) return;
 	absorb();
 	// A started-and-immediately-stopped timer isn't history worth keeping.
-	if (timer.row.seconds < 1) dropRow(timer.row);
+	if (discard || timer.row.seconds < 1) dropRow(timer.row);
 	else saveRow(timer.row);
 	timer = null;
 	if (ticker) { clearInterval(ticker); ticker = null; }
@@ -245,24 +289,32 @@ function nextPhase(auto) {
 
 function tick() {
 	absorb();
-	if (timer.running && timer.counted >= timer.capAt) return askStillReading();
+	if (timer.running && timer.counted >= timer.capAt) return askCheckIn();
 	if (timer.mode === "pomodoro" && timer.running && timer.phaseElapsed >= phaseLen()) nextPhase(true);
 	if (timer.running && ++ticks % FLUSH_EVERY === 0) saveRow(timer.row);
 	paint();
 }
 
-// A timer left running overnight logs a night's sleep as reading. At the cap we
-// pause first, so the answer never costs time, then ask.
-function askStillReading() {
+// A timer left running logs a walk away from the desk as reading. Every hour we
+// pause first — so answering never costs time — and ask what to actually keep.
+// The prompt is pre-filled with the elapsed time: confirm it, correct it, or
+// cancel to stop the timer with what's already counted.
+function askCheckIn() {
 	if (asking) return;
 	asking = true;
 	setPaused(true);
-	const keep = confirm(`This timer has counted ${fmtTotal(timer.counted)} without stopping. `
-		+ `Still reading?\n\nYes keeps it running; No stops it and saves what's counted so far.`);
+	const counted = timer.counted;
+	const answer = promptValue(
+		`This timer has been running for ${fmtTotal(counted)} without a stop.\n\n`
+		+ `How much of it was actually reading? Cancel stops the timer and keeps ${fmtTotal(counted)}.`,
+		fmtTotal(counted));
 	asking = false;
-	if (!timer) return;         // stopped from elsewhere while the prompt was up
-	if (!keep) return stop();
-	timer.capAt += MAX_SESSION;
+	if (!timer) return;              // stopped from elsewhere while the prompt was up
+	if (answer === null) return stop();
+	const keep = parseDuration(answer);
+	if (keep <= 0) return stop(true);   // nothing worth keeping — drop the session
+	timer.counted = keep;
+	timer.capAt = keep + CHECK_IN;
 	setPaused(false);
 }
 
@@ -342,13 +394,15 @@ function paint() {
 		if (!bar.doc.defaultView || !bar.btn.isConnected) { bars.delete(bar); continue; }
 		safe(() => { bar.label.textContent = isMine(itemOf(bar.reader)) ? liveText() : ""; });
 	}
-	if (panel) safe(() => panel.refresh());
+	if (panel && !panel.el.isConnected) closePanel();  // document swapped under us
+	else if (panel) safe(() => panel.refresh());
 }
 
 // The library column and the item-pane row cache their values, so nudge them
 // when a total settles. Never on the 1 Hz tick — refreshing the column rebuilds
 // the tree; the live count belongs in the toolbar button, not the library view.
 function refreshViews() {
+	if (!active) return;  // don't rebuild the item tree while Zotero is tearing down
 	try { if (columnKey) Zotero.ItemTreeManager.refreshColumns(); } catch (e) { oops(e); }
 	try { if (infoRowID) Zotero.ItemPaneManager.refreshInfoRow(infoRowID); } catch (e) { oops(e); }
 }
@@ -376,7 +430,11 @@ function closePanel() {
 }
 
 function openPanel(reader, doc, btn) {
-	const item = itemOf(reader);
+	// Sweep anything an earlier open may have left behind. A stray box would sit
+	// there forever: unclosable, because closePanel() bails when `panel` is null,
+	// and frozen, because paint() only refreshes what `panel` points at.
+	for (const stray of doc.querySelectorAll(".rt-panel")) stray.remove();
+
 	const box = el(doc, "div", "rt-panel");
 	const rect = btn.getBoundingClientRect();
 	const vw = (doc.defaultView && doc.defaultView.innerWidth) || 800;
@@ -384,29 +442,38 @@ function openPanel(reader, doc, btn) {
 	box.style.left = Math.max(8, Math.min(rect.left, vw - 268)) + "px";
 	doc.body.append(box);
 
+	// Publish the panel before filling it, so however the rest of this function
+	// goes, what is on screen is always what closePanel() and paint() act on.
+	panel = { el: box, btn, cleanup: () => {}, refresh: () => {} };
+	panel.cleanup = watchOutside(reader, doc, box, btn);
+	safe(() => fillPanel(doc, box, itemOf(reader)));
+	safe(() => panel.refresh());
+}
+
+// Close on a click outside or on Escape. The document sits in a nested iframe,
+// so events there never reach the reader document — listen on both. Touching a
+// torn-down view's window can throw ("dead object"), hence the guard.
+function watchOutside(reader, doc, box, btn) {
 	const onDown = (e) => { if (!box.contains(e.target) && e.target !== btn) closePanel(); };
 	const onKey = (e) => { if (e.key === "Escape") closePanel(); };
-	// The document lives in a nested iframe, so clicks there don't reach the
-	// reader doc — listen on both so outside-click and Escape always work.
 	const docs = [doc];
-	const inner = reader && reader._internalReader && reader._internalReader._primaryView
-		&& reader._internalReader._primaryView._iframeWindow
-		&& reader._internalReader._primaryView._iframeWindow.document;
+	const inner = safe(() => reader._internalReader._primaryView._iframeWindow.document, null);
 	if (inner && inner !== doc) docs.push(inner);
 	for (const d of docs) {
 		d.addEventListener("pointerdown", onDown, true);
 		d.addEventListener("keydown", onKey, true);
 	}
-	const cleanup = () => {
+	return () => {
 		for (const d of docs) {
 			d.removeEventListener("pointerdown", onDown, true);
 			d.removeEventListener("keydown", onKey, true);
 		}
 	};
+}
 
+function fillPanel(doc, box, item) {
 	if (!item || !db) {
-		box.append(el(doc, "div", "rt-muted", db ? "No item for this tab." : "Session database unavailable."));
-		panel = { el: box, btn, cleanup, refresh: () => {} };
+		box.append(el(doc, "div", "rt-muted", db ? "No item for this tab." : "Session database isn't ready yet."));
 		return;
 	}
 
@@ -439,7 +506,10 @@ function openPanel(reader, doc, btn) {
 	const addBtn = el(doc, "button", null, "Add");
 	addBtn.addEventListener("click", () => submit());
 	add.append(input, addBtn);
-	box.append(add);
+	const more = el(doc, "button", null, "📊 History for this item…");
+	more.style.marginTop = "8px";
+	more.addEventListener("click", () => { closePanel(); openHistory(item); });
+	box.append(add, more);
 
 	// Manual time is just another row in the log — negative to subtract.
 	const submit = () => {
@@ -459,7 +529,7 @@ function openPanel(reader, doc, btn) {
 
 	let key = null;
 	const refresh = () => {
-		stats.forEach(([, get], i) => { values[i].textContent = fmtTotal(get()) || "0m"; });
+		stats.forEach(([, get], i) => { values[i].textContent = fmtTotal(safe(get, 0)) || "0m"; });
 		const mine = isMine(item);
 		big.textContent = mine ? liveText() : "";
 		big.style.display = mine ? "" : "none";
@@ -481,14 +551,326 @@ function openPanel(reader, doc, btn) {
 		note.textContent = k === "other" ? "A timer is running on another item." : "";
 	};
 
-	panel = { el: box, btn, cleanup, refresh };
-	refresh();
+	panel.refresh = refresh;
+}
+
+// --- history window --------------------------------------------------------
+
+// Roll the flat session log up into days, and each day into items. Pure, so
+// test.js can check it; the window is just this shape turned into DOM.
+function historyByDay(rows) {
+	const days = new Map();
+	for (const r of rows) {
+		const day = startOfDay(r.started);
+		if (!days.has(day)) days.set(day, new Map());
+		const items = days.get(day);
+		const id = r.libraryID + "/" + r.itemKey;
+		const e = items.get(id) || { id, libraryID: r.libraryID, itemKey: r.itemKey, title: "", seconds: 0, sessions: 0, rows: [] };
+		e.seconds += r.seconds;
+		e.sessions += 1;
+		e.rows.push(r);
+		if (r.title) e.title = r.title;   // the most recent title wins
+		items.set(id, e);
+	}
+	return [...days.keys()].sort((a, b) => b - a).map((day) => {
+		const items = [...days.get(day).values()].sort((a, b) => b.seconds - a.seconds);
+		return { day, seconds: items.reduce((t, e) => t + e.seconds, 0), items };
+	});
+}
+
+// A GitHub-style calendar: `weeks` columns of 7 days ending with the current
+// week, Monday first. Future days in the current week come back null so the
+// last column stops at today. Walks with setDate() rather than adding 86400000
+// so a DST change doesn't skip or repeat a day.
+function heatmapWeeks(rows, now, weeks = 53) {
+	const byDay = new Map();
+	for (const r of rows) {
+		const d = startOfDay(r.started);
+		byDay.set(d, (byDay.get(d) || 0) + r.seconds);
+	}
+	const today = startOfDay(now);
+	const cur = new Date(today);
+	cur.setDate(cur.getDate() - ((cur.getDay() + 6) % 7) - (weeks - 1) * 7);  // Monday of the first week
+	const out = [];
+	for (let w = 0; w < weeks; w++) {
+		const week = [];
+		for (let i = 0; i < 7; i++) {
+			const day = cur.getTime();
+			week.push(day > today ? null : { day, seconds: byDay.get(day) || 0 });
+			cur.setDate(cur.getDate() + 1);
+		}
+		out.push(week);
+	}
+	return out;
+}
+
+// Five buckets, GitHub-style: nothing, a look, a sitting, a session, a day of it.
+const level = (sec) => sec <= 0 ? 0 : sec < 900 ? 1 : sec < 2700 ? 2 : sec < 7200 ? 3 : 4;
+
+function dayLabel(ms) {
+	if (ms === startOfDay(Date.now())) return "Today";
+	if (ms === startOfDay(Date.now() - DAY)) return "Yesterday";
+	return new Date(ms).toLocaleDateString(undefined,
+		{ weekday: "long", year: "numeric", month: "long", day: "numeric" });
+}
+
+const HISTORY_CSS = `
+body { margin:0; padding:16px; font:13px sans-serif; background:Canvas; color:CanvasText; }
+h1 { font-size:15px; margin:0 0 12px; }
+.sums { display:flex; gap:8px; margin-bottom:16px; }
+.sums div { flex:1; border:1px solid GrayText; border-radius:6px; padding:8px; text-align:center; }
+.sums b { display:block; font-size:15px; }
+.sums span { color:GrayText; font-size:11px; }
+.day { display:flex; justify-content:space-between; align-items:baseline; gap:8px;
+	margin:16px 0 4px; padding-bottom:3px; border-bottom:1px solid GrayText; font-weight:700; }
+.item { display:flex; align-items:baseline; gap:8px; padding:3px 4px; border-radius:4px; cursor:pointer; }
+.item:hover { background:Highlight; color:HighlightText; }
+.item .t { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.item .n { color:GrayText; font-size:11px; white-space:nowrap; }
+.item:hover .n { color:HighlightText; }
+.item b { font-variant-numeric:tabular-nums; white-space:nowrap; }
+.empty { color:GrayText; padding:24px 0; text-align:center; }
+.top { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.item button { font:10px sans-serif; padding:0 5px; border:1px solid transparent;
+	border-radius:4px; background:transparent; color:inherit; cursor:pointer; }
+.item:hover button { border-color:HighlightText; }
+.top button, .session button { font:11px sans-serif; padding:2px 8px; border:1px solid GrayText;
+	border-radius:5px; background:transparent; color:CanvasText; cursor:pointer; }
+.top button:hover, .session button:hover { background:Highlight; color:HighlightText; }
+.item .caret { color:GrayText; font-size:9px; width:9px; }
+.item:hover .caret { color:HighlightText; }
+.sessions { margin:0 0 4px 18px; }
+.session { display:flex; align-items:baseline; gap:8px; padding:2px 4px; font-size:12px; color:GrayText; }
+.session .when { font-variant-numeric:tabular-nums; }
+.session .mode { flex:1; min-width:0; }
+.session b { color:CanvasText; font-variant-numeric:tabular-nums; }
+.session .act { display:flex; gap:4px; align-items:center; }
+
+/* heatmap */
+body { --l0:#ebedf0; --l1:#9be9a8; --l2:#40c463; --l3:#30a14e; --l4:#216e39; }
+@media (prefers-color-scheme: dark) {
+	body { --l0:#2a2f35; --l1:#0e4429; --l2:#006d32; --l3:#26a641; --l4:#39d353; }
+}
+.hm { display:flex; gap:4px; align-items:flex-start; overflow-x:auto; padding-bottom:4px; }
+.hm-wd, .hm-cols { display:grid; grid-template-rows:repeat(7, 10px); gap:3px; }
+.hm-cols { grid-auto-flow:column; grid-auto-columns:10px; }
+.hm-wd { margin-top:12px; }  /* clear the month row so the rows line up */
+.hm-wd span { font-size:9px; line-height:10px; color:GrayText; padding-right:2px; }
+.hm-months { display:grid; grid-auto-flow:column; grid-auto-columns:10px; gap:3px; height:12px; }
+.hm-months span { font-size:9px; color:GrayText; white-space:nowrap; }
+.hm-cols i { border-radius:2px; background:var(--l0); }
+.hm-cols i[data-l="1"] { background:var(--l1); }
+.hm-cols i[data-l="2"] { background:var(--l2); }
+.hm-cols i[data-l="3"] { background:var(--l3); }
+.hm-cols i[data-l="4"] { background:var(--l4); }
+.hm-cols i[data-l] { cursor:pointer; }
+.hm-cols i.blank { background:transparent; }
+.legend { display:flex; align-items:center; gap:3px; justify-content:flex-end;
+	font-size:10px; color:GrayText; margin:2px 0 16px; }
+.legend i { width:10px; height:10px; border-radius:2px; background:var(--l0); }
+`;
+
+let historyWin = null;
+let historyFilter = null;   // { libraryID, itemKey, title } → one item, or null for all
+
+const inFilter = (r) => !historyFilter
+	|| (r.libraryID === historyFilter.libraryID && r.itemKey === historyFilter.itemKey);
+
+function openHistory(item) {
+	const main = Zotero.getMainWindow();
+	if (!main) return;
+	historyFilter = item
+		? { libraryID: item.libraryID, itemKey: item.key, title: item.getDisplayTitle() }
+		: null;
+	if (historyWin && !historyWin.closed) {
+		historyWin.focus();
+		return safe(() => buildHistory(historyWin));
+	}
+	// about:blank rather than a packaged XHTML: opened from a chrome window it
+	// inherits chrome privileges, and the whole document is built here anyway.
+	historyWin = main.openDialog("about:blank", "reading-time-history",
+		"chrome,centerscreen,resizable,scrollbars,width=800,height=700");
+	if (!historyWin) return;
+	const build = () => safe(() => buildHistory(historyWin));
+	if (historyWin.document.readyState === "complete") build();
+	else historyWin.addEventListener("load", build, { once: true });
+}
+
+// The calendar, its month row and its legend, as two block elements.
+function heatmapEls(doc, rows) {
+	const weeks = heatmapWeeks(rows, Date.now());
+
+	const months = el(doc, "div", "hm-months");
+	const cols = el(doc, "div", "hm-cols");
+	let lastMonth = -1;
+	weeks.forEach((week, w) => {
+		const first = week.find(Boolean);
+		const month = first ? new Date(first.day).getMonth() : lastMonth;
+		// Label a column when its month is new, except in the last two columns
+		// where the text would run off the end.
+		const label = month !== lastMonth && w < weeks.length - 2
+			? new Date(first.day).toLocaleDateString(undefined, { month: "short" }) : "";
+		months.append(el(doc, "span", null, label));
+		lastMonth = month;
+
+		for (const cell of week) {
+			const box = el(doc, "i");
+			cols.append(box);
+			if (!cell) { box.className = "blank"; continue; }  // future days in this week
+			box.dataset.l = level(cell.seconds);
+			box.title = (fmtTotal(cell.seconds) || "Nothing") + " — " + new Date(cell.day)
+				.toLocaleDateString(undefined, { weekday: "short", year: "numeric", month: "short", day: "numeric" });
+			box.addEventListener("click", () => {
+				const anchor = doc.getElementById("d" + cell.day);
+				if (anchor) anchor.scrollIntoView({ block: "center", behavior: "smooth" });
+			});
+		}
+	});
+
+	const wd = el(doc, "div", "hm-wd");
+	for (const d of ["Mon", "", "Wed", "", "Fri", "", ""]) wd.append(el(doc, "span", null, d));
+
+	const stack = el(doc, "div");
+	stack.append(months, cols);
+	const grid = el(doc, "div", "hm");
+	grid.append(wd, stack);
+
+	const legend = el(doc, "div", "legend");
+	legend.append(el(doc, "span", null, "Less"));
+	for (let l = 0; l <= 4; l++) {
+		const box = el(doc, "i");
+		if (l) box.dataset.l = l;
+		legend.append(box);
+	}
+	legend.append(el(doc, "span", null, "More"));
+	return [grid, legend];
+}
+
+// One logged session: when it started, how it was tracked, how long — and the
+// two things you can do to it. Editing writes an absolute duration; 0 deletes.
+function sessionRow(doc, win, r) {
+	const line = el(doc, "div", "session");
+	const live = !!(timer && timer.row === r);
+	line.append(
+		el(doc, "span", "when", new Date(r.started).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })),
+		el(doc, "span", "mode", r.mode),
+		el(doc, "b", null, live ? "running" : (fmtTotal(r.seconds) || "0s")));
+
+	const act = el(doc, "span", "act");
+	if (live) {
+		act.append(el(doc, "span", "n", "stop the timer to edit"));
+	} else {
+		const edit = el(doc, "button", null, "✎");
+		edit.title = "Change this session's duration";
+		edit.addEventListener("click", (e) => { e.stopPropagation(); editSession(win, r); });
+		const del = el(doc, "button", null, "✕");
+		del.title = "Delete this session";
+		del.addEventListener("click", (e) => { e.stopPropagation(); deleteSession(win, r); });
+		act.append(edit, del);
+	}
+	line.append(act);
+	line.addEventListener("click", (e) => e.stopPropagation());  // don't collapse the list
+	return line;
+}
+
+function editSession(win, r) {
+	const answer = promptValue(
+		`Session on ${new Date(r.started).toLocaleString()}.\n\nNew duration (0 deletes it):`,
+		fmtTotal(r.seconds) || "0s");
+	if (answer === null) return;
+	const sec = Math.round(parseDuration(answer));
+	if (sec <= 0) dropRow(r);
+	else { r.seconds = sec; saveRow(r); }
+	refreshViews();
+	paint();
+	safe(() => buildHistory(win));
+}
+
+function deleteSession(win, r) {
+	if (!confirm(`Delete this ${fmtTotal(r.seconds) || "0s"} session from ${new Date(r.started).toLocaleString()}?`)) return;
+	dropRow(r);
+	refreshViews();
+	paint();
+	safe(() => buildHistory(win));
+}
+
+function buildHistory(win) {
+	const doc = win.document;
+	const main = Zotero.getMainWindow();
+	const rows = log.filter(inFilter);
+	doc.title = "Reading time";
+	doc.head.replaceChildren(el(doc, "style", null, HISTORY_CSS));
+
+	const head = el(doc, "div", "top");
+	head.append(el(doc, "h1", null, historyFilter ? historyFilter.title : "Reading time"));
+	if (historyFilter) {
+		const all = el(doc, "button", null, "← All items");
+		all.addEventListener("click", () => { historyFilter = null; safe(() => buildHistory(win)); });
+		head.append(all);
+	}
+	doc.body.replaceChildren(head);
+
+	const sums = el(doc, "div", "sums");
+	const spans = [["Today", 0], ["Last 7 days", 6], ["Last 30 days", 29], ["All time", null]];
+	for (const [name, back] of spans) {
+		const box = el(doc, "div");
+		const since = back === null ? 0 : startOfDay(Date.now() - back * DAY);
+		box.append(el(doc, "b", null, fmtTotal(sumSeconds(rows, { since })) || "0m"),
+			el(doc, "span", null, name));
+		sums.append(box);
+	}
+	doc.body.append(sums);
+	doc.body.append(...heatmapEls(doc, rows));
+
+	const days = historyByDay(rows);
+	if (!days.length) {
+		doc.body.append(el(doc, "div", "empty", "No reading sessions yet."));
+		return;
+	}
+	for (const d of days) {
+		const head = el(doc, "div", "day");
+		head.id = "d" + d.day;
+		head.append(el(doc, "span", null, dayLabel(d.day)), el(doc, "span", null, fmtTotal(d.seconds) || "0m"));
+		doc.body.append(head);
+		for (const e of d.items) {
+			const row = el(doc, "div", "item");
+			const caret = el(doc, "span", "caret", "▸");
+			row.append(caret, el(doc, "span", "t", e.title || "(untitled)"),
+				el(doc, "span", "n", e.sessions + (e.sessions === 1 ? " session" : " sessions")),
+				el(doc, "b", null, fmtTotal(e.seconds) || "0m"));
+			row.title = "Show this day's sessions";
+			const show = el(doc, "button", null, "↗");
+			show.title = "Show in library";
+			show.addEventListener("click", (ev) => safe(() => {
+				ev.stopPropagation();
+				const itemID = Zotero.Items.getIDFromLibraryAndKey(e.libraryID, e.itemKey);
+				if (!itemID) return;
+				main.ZoteroPane.selectItem(itemID);
+				main.focus();
+			}));
+			row.append(show);
+
+			const list = el(doc, "div", "sessions");
+			list.hidden = true;
+			for (const r of e.rows.slice().sort((a, b) => a.started - b.started)) {
+				list.append(sessionRow(doc, win, r));
+			}
+
+			row.addEventListener("click", () => { list.hidden = !list.hidden; caret.textContent = list.hidden ? "▸" : "▾"; });
+			doc.body.append(row, list);
+		}
+	}
 }
 
 // --- plugin lifecycle ------------------------------------------------------
 
-async function startup({ id }) {
-	try { await openDB(); } catch (e) { oops(e); }
+// Not async, and nothing here waits on I/O: Zotero awaits every plugin's
+// startup() in sequence inside its own init, so anything slow here delays the
+// launch and anything that hangs stops it. The database loads in the
+// background — until it lands, `db` is null and every writer bails.
+function startup({ id }) {
+	active = true;
+	openDB().catch(oops);
 	onRenderToolbar = renderButton;
 	Zotero.Reader.registerEventListener("renderToolbar", onRenderToolbar, id);
 	infoRowID = Zotero.ItemPaneManager.registerInfoRow({
@@ -520,6 +902,26 @@ async function startup({ id }) {
 		zoteroPersist: ["width", "hidden", "sortDirection"],
 	});
 	if (!columnKey) Zotero.logError(new Error("Reading Time: item tree column was rejected"));
+	menuID = Zotero.MenuManager.registerMenu({
+		menuID: "reading-time-history",
+		pluginID: id,
+		target: "main/menubar/tools",
+		menus: [{ menuType: "menuitem", l10nID: "reading-time-history-menu", onCommand: () => openHistory() }],
+	});
+	itemMenuID = Zotero.MenuManager.registerMenu({
+		menuID: "reading-time-item-history",
+		pluginID: id,
+		target: "main/library/item",
+		menus: [{
+			menuType: "menuitem",
+			l10nID: "reading-time-item-history-menu",
+			onCommand: () => safe(() => {
+				const items = Zotero.getMainWindow().ZoteroPane.getSelectedItems();
+				const item = items && items[0];
+				openHistory(item && (item.parentItem || item));
+			}),
+		}],
+	});
 	for (const win of Zotero.getMainWindows()) onMainWindowLoad({ window: win });
 }
 
@@ -530,7 +932,9 @@ function onMainWindowLoad({ window }) {
 function onMainWindowUnload() {}
 
 async function shutdown() {
+	active = false;
 	stop();
+	if (ticker) { clearInterval(ticker); ticker = null; }
 	closePanel();
 	for (const bar of bars) bar.btn.remove();
 	bars.clear();
@@ -540,8 +944,16 @@ async function shutdown() {
 	onRenderToolbar = null;
 	if (infoRowID) Zotero.ItemPaneManager.unregisterInfoRow(infoRowID);
 	if (columnKey) Zotero.ItemTreeManager.unregisterColumn(columnKey);
-	infoRowID = columnKey = null;
-	if (db) { await db.closeDatabase().catch(oops); db = null; }
+	if (menuID) Zotero.MenuManager.unregisterMenu(menuID);
+	if (itemMenuID) Zotero.MenuManager.unregisterMenu(itemMenuID);
+	if (historyWin && !historyWin.closed) historyWin.close();
+	historyWin = null;
+	infoRowID = columnKey = menuID = itemMenuID = null;
+	// Must actually complete: Gecko will not finish shutting down until every
+	// SQLite connection is closed. Racing this against a setTimeout only looked
+	// like a bound — timers may already be dead this late in shutdown, and
+	// walking away from an open connection is what hangs the quit.
+	await closeDB();
 	log.length = 0;
 }
 
@@ -549,4 +961,4 @@ function install() {}
 function uninstall() {}
 
 // node-only: lets test.js import the pure helpers; no-op inside Zotero.
-if (typeof module !== "undefined") module.exports = { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay };
+if (typeof module !== "undefined") module.exports = { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, historyByDay, heatmapWeeks, level };

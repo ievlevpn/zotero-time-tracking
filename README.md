@@ -18,6 +18,23 @@ show the per-item total as a sortable column. It sorts by real duration, not by
 the text, and it refreshes when a timer stops — not every second, since that
 would rebuild the tree.
 
+## History
+
+**Tools → Reading Time History…** (or the 📊 button in the reader popup) opens a
+window with:
+
+- totals for today / 7 days / 30 days / all time;
+- a GitHub-style heatmap of the last 53 weeks — hover a square for that day's
+  time, click one to jump to that day below;
+- every day you read, newest first, with each item's time and session count.
+  Click a line to unfold that day's individual sessions — each one can be
+  re-timed (✎, enter a new duration; 0 deletes it) or deleted (✕). Use ↗ to
+  select the item in the library.
+
+For one item only, use **↗ right-click an item → Reading Time History…** in the
+library, or the 📊 button in the reader popup. Everything — totals, heatmap,
+day list — narrows to that item; "← All items" goes back.
+
 ## Storage
 
 Everything lands in **`time-tracker.sqlite`**, the plugin's own database next to
@@ -53,6 +70,12 @@ SELECT title, SUM(seconds) / 60 AS minutes
 FROM sessions GROUP BY libraryID, itemKey ORDER BY minutes DESC LIMIT 20;
 ```
 
+Every connection the plugin opens is tracked from the moment it exists and
+closed on any failure. That is not tidiness: Gecko will not finish shutting down
+until every SQLite connection is closed, so one leaked connection hangs Zotero's
+quit, and a Zotero that gets killed instead of quitting can lose add-on state —
+which shows up as the plugin uninstalling itself.
+
 The plugin opens it by absolute path, which tells Zotero it's an "external"
 database: no WAL, no idle backups, and no integrity-check dialog at startup —
 a time log should never be able to interrupt Zotero. Back it up yourself if you
@@ -86,10 +109,12 @@ folder, then restart Zotero.
 - **One timer at a time.** Two running at once would double-count the same
   stretch of time, so starting one on another item asks before taking over —
   it never switches silently.
-- **Six hours in a row.** A timer left running overnight would log a night's
-  sleep as reading. At six hours of counted time it pauses itself and asks
-  whether you're still reading; "no" stops it and keeps what it counted, "yes"
-  buys another six hours. Change `MAX_SESSION` in `bootstrap.js` to adjust.
+- **Hourly check-in.** Forgetting to stop the timer is the normal failure, so
+  every hour it pauses itself and asks how much of that hour was actually
+  reading, pre-filled with the elapsed time. Confirm it, type a smaller value
+  (`20m`), enter `0` to throw the session away, or cancel to stop the timer and
+  keep what's counted. Answering costs no time, since it pauses first. Change
+  `CHECK_IN` in `bootstrap.js` to adjust.
 
 ## Caveats
 

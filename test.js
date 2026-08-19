@@ -1,6 +1,6 @@
 // Self-check for the pure helpers: `node test.js`.
 const assert = require("assert");
-const { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay } = require("./bootstrap.js");
+const { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, historyByDay, heatmapWeeks, level } = require("./bootstrap.js");
 
 // A bare number means minutes; h/m/s are honoured; junk is ignored.
 assert.strictEqual(parseDuration("25"), 1500);
@@ -59,5 +59,49 @@ assert.notStrictEqual(sortKey(0), "");
 assert.strictEqual(sortKey(-100), sortKey(0));      // clamped, not "-000000100"
 assert.strictEqual(sortKey(0).length, sortKey(999999).length);
 assert.strictEqual(fmtTotal(parseInt(sortKey(4980), 10)), "1h 23m");  // round-trips for display
+
+// History rollup: newest day first, items merged per day and sorted by time.
+const days = historyByDay(log);
+assert.deepStrictEqual(days.map((d) => d.day), [today, today - 3 * DAY, today - 30 * DAY]);
+
+const [t] = days;
+assert.strictEqual(t.seconds, 1200);                       // 900 + 600 - 300
+assert.strictEqual(t.items.length, 2);
+assert.deepStrictEqual(t.items.map((e) => e.seconds), [600, 600]);   // 900-300 and 600
+assert.deepStrictEqual(t.items.map((e) => e.itemKey).sort(), ["AAAA", "BBBB"]);
+const aaaa = t.items.find((e) => e.itemKey === "AAAA");
+assert.strictEqual(aaaa.sessions, 2);                      // the timer and the manual row merge
+assert.strictEqual(aaaa.title, "t");
+assert.strictEqual(aaaa.rows.length, 2);                   // raw rows kept, for editing
+assert.deepStrictEqual(aaaa.rows.map((r) => r.id).sort(), ["b", "d"]);
+assert.deepStrictEqual(historyByDay([]), []);
+
+// Within a day, the longest read comes first.
+const ranked = historyByDay([row("x", "LOW", today + 1000, 60), row("y", "HIGH", today + 2000, 3600)]);
+assert.deepStrictEqual(ranked[0].items.map((e) => e.itemKey), ["HIGH", "LOW"]);
+
+// Sessions on the same day for the same item collapse to one line; different
+// days stay apart even for the same item.
+assert.strictEqual(days[1].items.length, 1);
+assert.strictEqual(days[1].items[0].sessions, 1);
+
+// Heatmap grid: 53 Monday-first columns ending in the current week.
+const grid = heatmapWeeks(log, Date.now());
+assert.strictEqual(grid.length, 53);
+assert.ok(grid.every((w) => w.length === 7));
+const cells = grid.flat().filter(Boolean);
+assert.strictEqual(cells.at(-1).day, today);                  // last real cell is today
+assert.ok(grid.at(-1).slice(grid.at(-1).findIndex((c) => c && c.day === today) + 1).every((c) => c === null));
+assert.strictEqual(new Date(grid[0][0].day).getDay(), 1);     // columns start on Monday
+assert.strictEqual(cells.filter((c) => c.day === today)[0].seconds, 1200);  // today's total
+assert.strictEqual(cells.filter((c) => c.seconds > 0).length, 3);  // 3 days with sessions in range
+// Days are unique and strictly increasing across the grid.
+assert.ok(cells.every((c, i) => i === 0 || c.day > cells[i - 1].day));
+
+// Crossing a DST boundary must not skip or duplicate a day: every column is
+// exactly 7 distinct calendar days, and every cell is local midnight.
+assert.ok(cells.every((c) => new Date(c.day).getHours() === 0));
+
+assert.deepStrictEqual([0, 1, 899, 900, 2699, 2700, 7199, 7200].map(level), [0, 1, 1, 2, 2, 3, 3, 4]);
 
 console.log("ok");

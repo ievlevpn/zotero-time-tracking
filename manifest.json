@@ -1,7 +1,7 @@
 {
 	"manifest_version": 2,
 	"name": "Reading Time",
-	"version": "0.5.0",
+	"version": "0.9.0",
 	"description": "Tracks reading time per item: a stopwatch, a pomodoro timer and manual entry in the reader toolbar, totalled into a \"Reading time\" field.",
 	"author": "Pavel Ievlev",
 	"icons": {
