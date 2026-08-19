@@ -1,0 +1,18 @@
+{
+  "addons": {
+    "reading-time@local": {
+      "updates": [
+        {
+          "version": "0.9.0",
+          "update_link": "https://github.com/ievlevpn/zotero-time-tracking/releases/download/v0.9.0/reading-time.xpi",
+          "applications": {
+            "zotero": {
+              "strict_min_version": "6.999",
+              "strict_max_version": "10.*"
+            }
+          }
+        }
+      ]
+    }
+  }
+}
