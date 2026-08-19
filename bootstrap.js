@@ -33,11 +33,11 @@ let db = null;            // the usable connection, or null
 let dbConn = null;        // every connection we open, usable or not — see openDB()
 const log = [];           // every session row, mirrored from the DB
 let timer = null;         // the single active timer, or null — see start()
-let ticker = null;        // setInterval handle, alive only while a timer exists
+let ticker = null;        // the one interval, running for the whole session
 let ticks = 0;
 let asking = false;       // a modal prompt is up; a modal spins the event loop,
                           // so the ticker can fire again while we wait
-const bars = new Set();   // rendered toolbars: { reader, doc, btn, label }
+const bars = new Map();   // container element → { reader, doc, btn, label, host }
 let panel = null;         // the single open popup: { el, btn, cleanup, refresh }
 
 // --- duration parse/format -------------------------------------------------
@@ -252,7 +252,6 @@ function start(mode, item) {
 		phase: "focus", phaseElapsed: 0,
 	};
 	ticks = 0;
-	if (!ticker) ticker = setInterval(tick, 1000);
 	paint();
 }
 
@@ -272,7 +271,6 @@ function stop(discard) {
 	if (discard || timer.row.seconds < 1) dropRow(timer.row);
 	else saveRow(timer.row);
 	timer = null;
-	if (ticker) { clearInterval(ticker); ticker = null; }
 	paint();
 	refreshViews();
 }
@@ -285,6 +283,16 @@ function nextPhase(auto) {
 	saveRow(timer.row);
 	if (auto) alertPhase();
 	paint();
+}
+
+// One interval for the session, not just while a timer runs: paint() is also
+// what notices a missing toolbar button and puts it back, and buttons go
+// missing whether or not you happen to be timing something.
+// ponytail: a fixed 1 Hz walk over at most a handful of open readers — make it
+// adaptive only if it ever shows up in a profile.
+function pulse() {
+	if (timer) tick();
+	else paint();
 }
 
 function tick() {
@@ -372,39 +380,73 @@ function injectCSS(doc) {
 	(doc.head || doc.documentElement).append(style);
 }
 
-function renderButton(event) {
-	const { reader, doc, append } = event;
-	injectCSS(doc);
+// Build the clock button and its live-time label.
+function makeButton(doc, reader) {
 	const btn = doc.createElement("button");
 	btn.className = "toolbar-button rt-btn";
 	btn.title = "Reading time";
 	const label = el(doc, "span", "rt-live");
 	btn.append(el(doc, "span", null, "🕐"), label);
 	btn.addEventListener("click", () => togglePanel(reader, doc, btn));
+	return { btn, label };
+}
+
+// The reader wipes its custom-section container and re-fires this on every
+// render, so a bar is only ever as current as the last render. Key by that
+// container: re-renders replace the entry instead of piling up, and paint()
+// has something stable to put the button back into.
+function renderButton(event) {
+	const { reader, doc, append } = event;
+	injectCSS(doc);
+	const { btn, label } = makeButton(doc, reader);
 	append(btn);
-	bars.add({ reader, doc, btn, label });
+	const host = (btn.parentElement && btn.parentElement.parentElement) || null;
+	bars.set(host || doc, { reader, doc, btn, label, host });
+	paint();
+}
+
+// Put a button back into a container that still exists but no longer has ours.
+function restoreButton(bar) {
+	const section = el(bar.doc, "div", "section");
+	const { btn, label } = makeButton(bar.doc, bar.reader);
+	section.append(btn);
+	bar.host.append(section);
+	bar.btn = btn;
+	bar.label = label;
+}
+
+// After an upgrade our buttons left with the old sandbox, and Zotero only
+// re-fires renderToolbar when the reader next renders — which may be never for
+// a tab you are already looking at. Claim the open ones now.
+function adoptOpenReaders() {
+	for (const reader of (Zotero.Reader._readers || [])) safe(() => {
+		const doc = reader._iframeWindow && reader._iframeWindow.document;
+		const host = doc && doc.querySelector(".toolbar .custom-sections");
+		if (!host || bars.has(host)) return;
+		injectCSS(doc);
+		const bar = { reader, doc, host, btn: null, label: null };
+		restoreButton(bar);
+		bars.set(host, bar);
+	});
 	paint();
 }
 
 function paint() {
-	for (const bar of [...bars]) {
-		// The reader wipes and re-fires the toolbar hook on every React render, so
-		// entries go stale constantly — drop them, or they pile up for the session
-		// and every one of them is another chance to throw mid-loop.
-		if (!bar.doc.defaultView || !bar.btn.isConnected) { bars.delete(bar); continue; }
+	for (const [key, bar] of [...bars]) {
+		if (!bar.doc.defaultView) { bars.delete(key); continue; }  // reader tab closed
+		if (!bar.btn.isConnected) {
+			// Zotero dispatches renderToolbar to every plugin from a single
+			// unguarded loop, so if a peer registered before us throws, our turn
+			// never comes and the button stays missing until some later render.
+			// If the container is still there, put it back ourselves.
+			if (!bar.host || !bar.host.isConnected) { bars.delete(key); continue; }
+			safe(() => restoreButton(bar));
+			if (!bar.btn.isConnected) continue;
+		}
 		safe(() => { bar.label.textContent = isMine(itemOf(bar.reader)) ? liveText() : ""; });
 	}
 	if (panel && !panel.el.isConnected) closePanel();  // document swapped under us
 	else if (panel) safe(() => panel.refresh());
-}
-
-// The library column and the item-pane row cache their values, so nudge them
-// when a total settles. Never on the 1 Hz tick — refreshing the column rebuilds
-// the tree; the live count belongs in the toolbar button, not the library view.
-function refreshViews() {
-	if (!active) return;  // don't rebuild the item tree while Zotero is tearing down
-	try { if (columnKey) Zotero.ItemTreeManager.refreshColumns(); } catch (e) { oops(e); }
-	try { if (infoRowID) Zotero.ItemPaneManager.refreshInfoRow(infoRowID); } catch (e) { oops(e); }
 }
 
 // --- popup -----------------------------------------------------------------
@@ -873,6 +915,7 @@ function startup({ id }) {
 	openDB().catch(oops);
 	onRenderToolbar = renderButton;
 	Zotero.Reader.registerEventListener("renderToolbar", onRenderToolbar, id);
+	ticker = setInterval(pulse, 1000);
 	infoRowID = Zotero.ItemPaneManager.registerInfoRow({
 		rowID: "reading-time",
 		pluginID: id,
@@ -923,6 +966,7 @@ function startup({ id }) {
 		}],
 	});
 	for (const win of Zotero.getMainWindows()) onMainWindowLoad({ window: win });
+	safe(adoptOpenReaders);
 }
 
 function onMainWindowLoad({ window }) {
@@ -936,7 +980,7 @@ async function shutdown() {
 	stop();
 	if (ticker) { clearInterval(ticker); ticker = null; }
 	closePanel();
-	for (const bar of bars) bar.btn.remove();
+	for (const bar of bars.values()) safe(() => bar.btn.remove());
 	bars.clear();
 	if (onRenderToolbar && Zotero.Reader.unregisterEventListener) {
 		Zotero.Reader.unregisterEventListener("renderToolbar", onRenderToolbar);
