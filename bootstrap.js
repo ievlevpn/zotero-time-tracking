@@ -304,15 +304,16 @@ function nextPhase(auto) {
 // ponytail: a fixed 1 Hz walk over at most a handful of open readers — make it
 // adaptive only if it ever shows up in a profile.
 function pulse() {
-	if (timer) tick();
-	else paint();
+	safe(() => (timer ? tick() : paint()));
 }
 
 function tick() {
-	absorb();
-	if (timer.running && timer.counted >= timer.capAt) return askCheckIn();
-	if (timer.mode === "pomodoro" && timer.running && timer.phaseElapsed >= phaseLen()) nextPhase(true);
-	if (timer.running && ++ticks % FLUSH_EVERY === 0) saveRow(timer.row);
+	safe(absorb);
+	// Each step can drop the timer (a check-in answered with "stop"), so re-test
+	// it — and reach paint() no matter which of them did what.
+	if (timer && timer.running && timer.counted >= timer.capAt) askCheckIn();
+	else if (timer && timer.mode === "pomodoro" && timer.running && timer.phaseElapsed >= phaseLen()) safe(() => nextPhase(true));
+	if (timer && timer.running && ++ticks % FLUSH_EVERY === 0) safe(() => saveRow(timer.row));
 	paint();
 }
 
@@ -459,23 +460,32 @@ function adoptOpenReaders() {
 	paint();
 }
 
+// One toolbar. Returns false when the bar is finished with, for any reason.
+function paintBar(bar) {
+	if (!bar.doc.defaultView) return false;              // reader tab closed
+	if (!bar.id) bar.id = idFor(bar.reader);             // wasn't loaded when we rendered
+	if (!bar.btn.isConnected) {
+		// Zotero dispatches renderToolbar to every plugin from a single
+		// unguarded loop, so if a peer registered before us throws, our turn
+		// never comes and the button stays missing until some later render.
+		// If the container is still there, put it back ourselves.
+		if (!bar.host || !bar.host.isConnected) return false;
+		restoreButton(bar);
+	}
+	bar.label.textContent = (timer && bar.id === timer.id) ? liveText() : "";
+	return true;
+}
+
 function paint() {
 	for (const [key, bar] of [...bars]) {
-		if (!bar.doc.defaultView) { bars.delete(key); continue; }  // reader tab closed
-		if (!bar.id) bar.id = idFor(bar.reader);   // wasn't loaded yet when we rendered
-		if (!bar.btn.isConnected) {
-			// Zotero dispatches renderToolbar to every plugin from a single
-			// unguarded loop, so if a peer registered before us throws, our turn
-			// never comes and the button stays missing until some later render.
-			// If the container is still there, put it back ourselves.
-			if (!bar.host || !bar.host.isConnected) { bars.delete(key); continue; }
-			safe(() => restoreButton(bar));
-			if (!bar.btn.isConnected) continue;
-		}
-		safe(() => { bar.label.textContent = (timer && bar.id === timer.id) ? liveText() : ""; });
+		// Every property read above can throw "can't access dead object" once a
+		// reader tab is closed and its document is collected. Unguarded, one dead
+		// bar ends the whole loop before the live toolbar or the popup is
+		// reached — and since it is never removed, it does that again every
+		// second: both displays freeze for good. Guard per bar, drop on failure.
+		if (!safe(() => paintBar(bar), false)) bars.delete(key);
 	}
-	if (panel && !panel.el.isConnected) closePanel();  // document swapped under us
-	else if (panel) safe(() => panel.refresh());
+	if (panel) safe(() => { if (panel.el.isConnected) panel.refresh(); else closePanel(); });
 }
 
 // --- popup -----------------------------------------------------------------
