@@ -105,11 +105,16 @@ folder, then restart Zotero.
 
 - The pomodoro focus length lives in the popup (`−5` / `+5`); `BREAK_MIN` at the
   top of `bootstrap.js` sets the break.
-- `node test.js` runs the self-check for duration parsing/formatting and the
-  session-log sums.
+- `node test.js` runs the self-checks: duration parsing/formatting, the
+  session-log sums, the heatmap grid, and a smoke test that drives a whole
+  session (start → tick → pause → book closed) against a stubbed Zotero.
 
 ## Guardrails
 
+- **Closing the book stops the timer.** A timer whose item has no reader open
+  anywhere is counting time nobody is spending, and with its toolbar gone there
+  is nothing on screen to notice it by. It stops, keeps what it counted, and
+  says so.
 - **One timer at a time.** Two running at once would double-count the same
   stretch of time, so starting one on another item asks before taking over —
   it never switches silently.

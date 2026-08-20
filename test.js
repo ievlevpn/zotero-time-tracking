@@ -104,4 +104,56 @@ assert.ok(cells.every((c) => new Date(c.day).getHours() === 0));
 
 assert.deepStrictEqual([0, 1, 899, 900, 2699, 2700, 7199, 7200].map(level), [0, 1, 1, 2, 2, 3, 3, 4]);
 
+// --- smoke test -----------------------------------------------------------
+// Drive a whole session against a stubbed Zotero. This exists because a careless
+// edit once deleted refreshViews() and every caller kept "working" — the throw
+// happened after the important part, so nothing looked broken for six releases.
+const { __internals: I } = require("./bootstrap.js");
+const written = [];
+const attach = { id: 10, libraryID: 1, key: "ATT", parentID: 1 };
+const book = { id: 1, libraryID: 1, key: "BOOK", isRegularItem: () => true, getDisplayTitle: () => "Book" };
+Object.defineProperty(attach, "parentItem", { get() { return global.Zotero.Items.get(this.parentID); } });
+let openReaders = [{ itemID: 10 }];
+let refreshes = 0;
+global.Zotero = {
+	logError: (e) => { throw e; },                       // no silent failures in tests
+	Items: { get: (id) => ({ 10: attach, 1: book }[id] || false) },
+	Reader: { get _readers() { return openReaders; } },
+	Utilities: { randomString: () => "id" + written.length },
+	ItemTreeManager: { refreshColumns: () => refreshes++ },
+	ItemPaneManager: { refreshInfoRow: () => refreshes++ },
+	ProgressWindow: function () { this.changeHeadline = () => {}; this.show = () => {}; this.startCloseTimer = () => {}; },
+	Prefs: { get: () => undefined, set: () => {} },
+};
+global.Components = { classes: {}, interfaces: {} };
+I.setActive(true);
+I.setRegistered("col", "row");   // as startup() would, so refreshViews() has work to do
+I.setDB({ queryAsync: (sql, params) => { written.push(sql.trim().split(/\s+/)[0]); return Promise.resolve([]); } });
+
+I.start("stopwatch", book);
+assert.ok(I.getTimer(), "timer runs after start");
+assert.strictEqual(I.log.length, 1, "starting logs a session row");
+assert.strictEqual(written[0], "INSERT");
+
+const session = I.log[0];
+session.seconds = 0;
+I.getTimer().counted = 120;          // pretend two minutes passed
+I.tick();                            // absorb + paint, and must not throw
+assert.strictEqual(session.seconds, 120, "the row tracks counted time");
+
+I.setPaused(true);
+assert.strictEqual(I.getTimer().running, false, "pause stops the clock");
+I.setPaused(false);
+
+// Closing the book stops the timer — after one grace check, not immediately.
+openReaders = [];
+I.checkOrphaned();
+assert.ok(I.getTimer(), "one missed check is a grace period");
+I.checkOrphaned();
+assert.strictEqual(I.getTimer(), null, "a closed book stops the timer");
+assert.strictEqual(I.log.length, 1, "the session is kept, not dropped");
+assert.strictEqual(I.log[0].seconds, 120, "with its time intact");
+assert.ok(refreshes > 0, "the column and item pane get refreshed");
+assert.ok(written.includes("UPDATE"), "the final duration is written");
+
 console.log("ok");

@@ -23,6 +23,7 @@ const FOCUS_RANGE = [5, 120];
 
 const CHECK_IN = 3600;    // seconds of counted time between "still reading?" prompts
 const FLUSH_EVERY = 60;   // seconds between DB writes while a timer runs
+const ORPHAN_EVERY = 5;   // seconds between "is the book still open?" checks
 const MAX_STEP = 5;       // seconds; longer gaps mean the machine slept
 const DAY = 86400000;
 
@@ -200,6 +201,7 @@ function addRow(item, mode, seconds, started = Date.now()) {
 }
 
 function saveRow(row) {
+	if (!db) return;   // nothing to write to; the in-memory log still has it
 	db.queryAsync("UPDATE sessions SET seconds = ?, title = ? WHERE id = ?",
 		[row.seconds, row.title, row.id]).catch(oops);
 }
@@ -207,6 +209,7 @@ function saveRow(row) {
 function dropRow(row) {
 	const i = log.indexOf(row);
 	if (i >= 0) log.splice(i, 1);
+	if (!db) return;
 	db.queryAsync("DELETE FROM sessions WHERE id = ?", [row.id]).catch(oops);
 }
 
@@ -313,12 +316,15 @@ function pulse() {
 }
 
 function tick() {
+	ticks++;
 	safe(absorb);
+	if (ticks % ORPHAN_EVERY === 0) safe(checkOrphaned);
+	if (!timer) return paint();   // the check may have stopped it
 	// Each step can drop the timer (a check-in answered with "stop"), so re-test
 	// it — and reach paint() no matter which of them did what.
 	if (timer && timer.running && timer.counted >= timer.capAt) askCheckIn();
 	else if (timer && timer.mode === "pomodoro" && timer.running && timer.phaseElapsed >= phaseLen()) safe(() => nextPhase(true));
-	if (timer && timer.running && ++ticks % FLUSH_EVERY === 0) safe(() => saveRow(timer.row));
+	if (timer && timer.running && ticks % FLUSH_EVERY === 0) safe(() => saveRow(timer.row));
 	paint();
 }
 
@@ -345,15 +351,37 @@ function askCheckIn() {
 	setPaused(false);
 }
 
-function alertPhase() {
-	const focus = timer.phase === "focus";
+function notify(text, beep) {
 	try {
 		const pw = new Zotero.ProgressWindow({ closeOnClick: true });
-		pw.changeHeadline(focus ? `🍅 Break over — ${focusMin} min of reading` : `☕ Time for a ${BREAK_MIN} min break`);
+		pw.changeHeadline(text);
 		pw.show();
 		pw.startCloseTimer(6000);
-		Components.classes["@mozilla.org/sound;1"].getService(Components.interfaces.nsISound).beep();
+		if (beep) Components.classes["@mozilla.org/sound;1"].getService(Components.interfaces.nsISound).beep();
 	} catch (e) { oops(e); }
+}
+
+function alertPhase() {
+	notify(timer.phase === "focus"
+		? `🍅 Break over — ${focusMin} min of reading`
+		: `☕ Time for a ${BREAK_MIN} min break`, true);
+}
+
+// Closing the book ends the sitting. A timer whose item has no reader open
+// anywhere is counting time nobody is spending, and with its toolbar gone there
+// is nothing on screen to notice it by. Two strikes a few seconds apart, so a
+// reader that is merely mid-initialisation doesn't count as closed.
+function readerOpenFor(id) {
+	return (Zotero.Reader._readers || []).some((r) => safe(() => idFor(r), null) === id);
+}
+
+function checkOrphaned() {
+	if (readerOpenFor(timer.id)) { timer.orphaned = 0; return; }
+	if ((timer.orphaned = (timer.orphaned || 0) + 1) < 2) return;
+	const kept = fmtTotal(timer.counted);
+	const what = timer.row && timer.row.title;
+	stop();
+	notify(`⏹ Timer stopped — ${what ? `“${what}” was closed` : "the tab was closed"}${kept ? `, kept ${kept}` : ""}`);
 }
 
 // Text shown next to the clock button (and big inside the popup).
@@ -487,6 +515,15 @@ function paintBar(bar) {
 	}
 	bar.label.textContent = (timer && bar.id === timer.id) ? liveText() : "";
 	return true;
+}
+
+// The library column and the item-pane row cache their values, so nudge them
+// when a total settles. Never on the 1 Hz tick — refreshing the column rebuilds
+// the tree; the live count belongs in the toolbar button, not the library view.
+function refreshViews() {
+	if (!active) return;  // don't rebuild the item tree while Zotero is tearing down
+	try { if (columnKey) Zotero.ItemTreeManager.refreshColumns(); } catch (e) { oops(e); }
+	try { if (infoRowID) Zotero.ItemPaneManager.refreshInfoRow(infoRowID); } catch (e) { oops(e); }
 }
 
 function paint() {
@@ -1090,4 +1127,13 @@ function install() {}
 function uninstall() {}
 
 // node-only: lets test.js import the pure helpers; no-op inside Zotero.
-if (typeof module !== "undefined") module.exports = { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, historyByDay, heatmapWeeks, level };
+if (typeof module !== "undefined") {
+	module.exports = { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, historyByDay, heatmapWeeks, level };
+	// Enough of the machinery for test.js to drive a whole session. A smoke test
+	// is what catches an edit that quietly deletes a function everything calls.
+	module.exports.__internals = {
+		start, stop, tick, paint, setPaused, checkOrphaned, log, bars,
+		setActive: (v) => { active = v; }, setDB: (v) => { db = v; }, getTimer: () => timer,
+		setRegistered: (col, row) => { columnKey = col; infoRowID = row; },
+	};
+}
