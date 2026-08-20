@@ -515,7 +515,22 @@ function openPanel(reader, doc, btn) {
 	// goes, what is on screen is always what closePanel() and paint() act on.
 	panel = { el: box, btn, cleanup: () => {}, refresh: () => {} };
 	panel.cleanup = watchOutside(reader, doc, box, btn);
-	safe(() => fillPanel(doc, box, itemOf(reader)));
+	tryFill(doc, box, reader);
+}
+
+// The item may not be in Zotero's cache the instant you open the popup on a tab
+// you just switched to, and the database may still be loading. Neither is a
+// dead end, so wait for them on the 1 Hz pulse instead of showing a refusal.
+function tryFill(doc, box, reader) {
+	const item = itemOf(reader);
+	if (!item || !db) {
+		box.replaceChildren(el(doc, "div", "rt-muted", db ? "Loading item…" : "Loading sessions…"));
+		panel.refresh = () => safe(() => tryFill(doc, box, reader));
+		return;
+	}
+	box.replaceChildren();
+	panel.refresh = () => {};
+	safe(() => fillPanel(doc, box, item));   // sets panel.refresh when it succeeds
 	safe(() => panel.refresh());
 }
 
@@ -541,11 +556,6 @@ function watchOutside(reader, doc, box, btn) {
 }
 
 function fillPanel(doc, box, item) {
-	if (!item || !db) {
-		box.append(el(doc, "div", "rt-muted", db ? "No item for this tab." : "Session database isn't ready yet."));
-		return;
-	}
-
 	// Stats: this item, plus today and the last 7 days across the whole library.
 	const stats = [["This item", () => totalFor(item)],
 		["Today", () => sumSeconds(log, { since: startOfDay(Date.now()) })],
