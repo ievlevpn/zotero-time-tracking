@@ -29,14 +29,22 @@ window with:
 - totals for today / 7 days / 30 days / all time;
 - a GitHub-style heatmap of the last 53 weeks — hover a square for that day's
   time, click one to jump to that day below;
+- **By collection** — every collection you've read in, biggest first, with time
+  in a sub-collection counting towards its parents. Click one to narrow the
+  whole window to it. An item in two collections counts in both, so these can
+  add up to more than the time you actually spent;
 - every day you read, newest first, with each item's time and session count.
   Click a line to unfold that day's individual sessions — each one can be
   re-timed (✎, enter a new duration; 0 deletes it) or deleted (✕). Use ↗ to
   select the item in the library.
 
 For one item only, use **↗ right-click an item → Reading Time History…** in the
-library, or the 📊 button in the reader popup. Everything — totals, heatmap,
-day list — narrows to that item; "← All items" goes back.
+library, or the 📊 button in the reader popup. Right-clicking a **collection**
+does the same for everything in it, sub-collections included. Everything — totals, heatmap,
+day list — narrows to it; "← All items" goes back.
+
+Collection membership is asked of Zotero when you open the window, never stored:
+collections change, sessions don't.
 
 ## Storage
 

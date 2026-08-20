@@ -34,6 +34,7 @@ let infoRowID = null;     // registration IDs come back namespaced with the
 let columnKey = null;     // plugin ID, so keep what register*() returns
 let menuID = null;
 let itemMenuID = null;
+let collectionMenuID = null;
 let db = null;            // the usable connection, or null
 let dbConn = null;        // every connection we open, usable or not — see openDB()
 const log = [];           // every session row, mirrored from the DB
@@ -661,7 +662,7 @@ function fillPanel(doc, box, item) {
 	add.append(input, addBtn);
 	const more = el(doc, "button", null, "📊 History for this item…");
 	more.style.marginTop = "8px";
-	more.addEventListener("click", () => { closePanel(); openHistory(item); });
+	more.addEventListener("click", () => { closePanel(); openHistory(itemFilter(item)); });
 	box.append(add, more);
 
 	// Manual time is just another row in the log — negative to subtract.
@@ -792,6 +793,55 @@ function currentTitle(e) {
 	}, null);
 }
 
+// Sum seconds per group, given a lookup from a row to the groups it belongs to.
+// An item in several collections counts in each of them, so these totals can
+// add up to more than the time actually spent — that is the honest answer to
+// "how much have I read in this collection". Pure, so test.js can check it.
+function rollUp(rows, groupsOf) {
+	const totals = new Map();
+	for (const r of rows) {
+		for (const g of groupsOf(r)) totals.set(g, (totals.get(g) || 0) + r.seconds);
+	}
+	return totals;
+}
+
+// Every collection an item sits in, plus their ancestors: time in a
+// sub-collection counts towards the parent, which is what people mean by
+// "how much have I read in this project".
+function collectionsOf(item) {
+	const out = new Set();
+	for (const id of safe(() => item.getCollections(), [])) {
+		let c = Zotero.Collections.get(id);
+		// Stop at the first ancestor already seen — its own ancestors are in too.
+		while (c && !out.has(c.id)) {
+			out.add(c.id);
+			c = c.parentID ? Zotero.Collections.get(c.parentID) : null;
+		}
+	}
+	return out;
+}
+
+// Collections with time in `rows`, biggest first. Membership is asked of Zotero
+// now rather than stored per session: collections change, sessions don't.
+function byCollection(rows) {
+	const cache = new Map();
+	const groupsOf = (r) => {
+		const key = r.libraryID + "/" + r.itemKey;
+		if (!cache.has(key)) {
+			cache.set(key, safe(() => {
+				const id = Zotero.Items.getIDFromLibraryAndKey(r.libraryID, r.itemKey);
+				const item = id && Zotero.Items.get(id);
+				return item ? collectionsOf(item) : [];
+			}, []));
+		}
+		return cache.get(key);
+	};
+	return [...rollUp(rows, groupsOf)]
+		.map(([id, seconds]) => ({ id, seconds, name: safe(() => Zotero.Collections.get(id).name, null) }))
+		.filter((c) => c.name && c.seconds > 0)
+		.sort((a, b) => b.seconds - a.seconds);
+}
+
 function dayLabel(ms) {
 	if (ms === startOfDay(Date.now())) return "Today";
 	if (ms === startOfDay(Date.now() - DAY)) return "Yesterday";
@@ -823,6 +873,8 @@ h1 { font-size:15px; margin:0 0 12px; }
 	border-radius:5px; background:transparent; color:CanvasText; cursor:pointer; }
 .top button:hover, .session button:hover { background:Highlight; color:HighlightText; }
 .item .caret { color:GrayText; font-size:9px; width:9px; }
+.coll { padding-left:10px; }
+.day .rt-muted { font-weight:400; }
 .item:hover .caret { color:HighlightText; }
 .sessions { margin:0 0 4px 18px; }
 .session { display:flex; align-items:baseline; gap:8px; padding:2px 4px; font-size:12px; color:GrayText; }
@@ -856,17 +908,34 @@ body { --l0:#ebedf0; --l1:#9be9a8; --l2:#40c463; --l3:#30a14e; --l4:#216e39; }
 `;
 
 let historyWin = null;
-let historyFilter = null;   // { libraryID, itemKey, title } → one item, or null for all
+let historyFilter = null;   // { title, match(row) } — one item, one collection, or null
 
-const inFilter = (r) => !historyFilter
-	|| (r.libraryID === historyFilter.libraryID && r.itemKey === historyFilter.itemKey);
+const inFilter = (r) => !historyFilter || historyFilter.match(r);
 
-function openHistory(item) {
+function itemFilter(item) {
+	const id = idOf(item);
+	return { title: item.getDisplayTitle(), match: (r) => r.libraryID + "/" + r.itemKey === id };
+}
+
+// Membership is resolved once, when the filter is made: every item in the
+// collection and in everything below it.
+function collectionFilter(collection) {
+	const keys = new Set();
+	const add = (c) => {
+		for (const it of safe(() => c.getChildItems(), [])) keys.add(it.libraryID + "/" + it.key);
+	};
+	add(collection);
+	for (const sub of safe(() => collection.getDescendents(false, "collection"), [])) {
+		const c = Zotero.Collections.get(sub.id);
+		if (c) add(c);
+	}
+	return { title: collection.name, match: (r) => keys.has(r.libraryID + "/" + r.itemKey) };
+}
+
+function openHistory(filter) {
 	const main = Zotero.getMainWindow();
 	if (!main) return;
-	historyFilter = item
-		? { libraryID: item.libraryID, itemKey: item.key, title: item.getDisplayTitle() }
-		: null;
+	historyFilter = filter || null;
 	if (historyWin && !historyWin.closed) {
 		historyWin.focus();
 		return safe(() => buildHistory(historyWin));
@@ -1007,6 +1076,32 @@ function buildHistory(win) {
 	doc.body.append(sums);
 	doc.body.append(...heatmapEls(doc, rows));
 
+	const colls = byCollection(rows);
+	if (colls.length > 1) {
+		const head2 = el(doc, "div", "day");
+		head2.append(el(doc, "span", null, "By collection"),
+			el(doc, "span", "rt-muted", "sub-collections included"));
+		doc.body.append(head2);
+		const SHOWN = 12;
+		for (const c of colls.slice(0, SHOWN)) {
+			const row = el(doc, "div", "item coll");
+			row.append(el(doc, "span", "t", c.name), el(doc, "b", null, fmtTotal(c.seconds) || "0m"));
+			row.title = "Show only this collection";
+			row.addEventListener("click", () => safe(() => {
+				const collection = Zotero.Collections.get(c.id);
+				if (!collection) return;
+				historyFilter = collectionFilter(collection);
+				buildHistory(win);
+			}));
+			doc.body.append(row);
+		}
+		// No silent truncation: say what was left out.
+		if (colls.length > SHOWN) {
+			doc.body.append(el(doc, "div", "item rt-muted",
+				`+${colls.length - SHOWN} more collections`));
+		}
+	}
+
 	const days = historyByDay(rows);
 	if (!days.length) {
 		doc.body.append(el(doc, "div", "empty", "No reading sessions yet."));
@@ -1095,6 +1190,19 @@ function startup({ id }) {
 		target: "main/menubar/tools",
 		menus: [{ menuType: "menuitem", l10nID: "reading-time-history-menu", onCommand: () => openHistory() }],
 	});
+	collectionMenuID = Zotero.MenuManager.registerMenu({
+		menuID: "reading-time-collection-history",
+		pluginID: id,
+		target: "main/library/collection",
+		menus: [{
+			menuType: "menuitem",
+			l10nID: "reading-time-collection-history-menu",
+			onCommand: () => safe(() => {
+				const collection = Zotero.getMainWindow().ZoteroPane.getSelectedCollection();
+				openHistory(collection ? collectionFilter(collection) : null);
+			}),
+		}],
+	});
 	itemMenuID = Zotero.MenuManager.registerMenu({
 		menuID: "reading-time-item-history",
 		pluginID: id,
@@ -1105,7 +1213,8 @@ function startup({ id }) {
 			onCommand: () => safe(() => {
 				const items = Zotero.getMainWindow().ZoteroPane.getSelectedItems();
 				const item = items && items[0];
-				openHistory(item && (item.parentItem || item));
+				const target = item && (item.parentItem || item);
+				openHistory(target ? itemFilter(target) : null);
 			}),
 		}],
 	});
@@ -1136,9 +1245,10 @@ async function shutdown() {
 	if (columnKey) Zotero.ItemTreeManager.unregisterColumn(columnKey);
 	if (menuID) Zotero.MenuManager.unregisterMenu(menuID);
 	if (itemMenuID) Zotero.MenuManager.unregisterMenu(itemMenuID);
+	if (collectionMenuID) Zotero.MenuManager.unregisterMenu(collectionMenuID);
 	if (historyWin && !historyWin.closed) historyWin.close();
 	historyWin = null;
-	infoRowID = columnKey = menuID = itemMenuID = null;
+	infoRowID = columnKey = menuID = itemMenuID = collectionMenuID = null;
 	// Must actually complete: Gecko will not finish shutting down until every
 	// SQLite connection is closed. Racing this against a setTimeout only looked
 	// like a bound — timers may already be dead this late in shutdown, and
@@ -1152,7 +1262,7 @@ function uninstall() {}
 
 // node-only: lets test.js import the pure helpers; no-op inside Zotero.
 if (typeof module !== "undefined") {
-	module.exports = { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, historyByDay, heatmapWeeks, level };
+	module.exports = { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, historyByDay, heatmapWeeks, level, rollUp };
 	// Enough of the machinery for test.js to drive a whole session. A smoke test
 	// is what catches an edit that quietly deletes a function everything calls.
 	module.exports.__internals = {

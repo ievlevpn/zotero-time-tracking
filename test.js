@@ -1,6 +1,6 @@
 // Self-check for the pure helpers: `node test.js`.
 const assert = require("assert");
-const { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, historyByDay, heatmapWeeks, level } = require("./bootstrap.js");
+const { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, historyByDay, heatmapWeeks, level, rollUp } = require("./bootstrap.js");
 
 // A bare number means minutes; h/m/s are honoured; junk is ignored.
 assert.strictEqual(parseDuration("25"), 1500);
@@ -103,6 +103,17 @@ assert.ok(cells.every((c, i) => i === 0 || c.day > cells[i - 1].day));
 assert.ok(cells.every((c) => new Date(c.day).getHours() === 0));
 
 assert.deepStrictEqual([0, 1, 899, 900, 2699, 2700, 7199, 7200].map(level), [0, 1, 1, 2, 2, 3, 3, 4]);
+
+// Per-collection rollup. An item in two collections counts in both, so the
+// group totals can exceed the time actually spent — that is deliberate.
+const membership = { "1/AAAA": [10, 20], "1/BBBB": [20] };
+const groups = rollUp(log, (r) => membership[r.libraryID + "/" + r.itemKey] || []);
+assert.strictEqual(groups.get(10), 6000);              // AAAA only
+assert.strictEqual(groups.get(20), 6600);              // AAAA + BBBB
+assert.strictEqual([...groups.values()].reduce((a, b) => a + b), 12600);
+assert.ok([...groups.values()].reduce((a, b) => a + b) > sumSeconds(log), "overlap is counted twice, by design");
+assert.strictEqual(rollUp(log, () => []).size, 0);     // items in no collection
+assert.strictEqual(rollUp([], () => [1]).size, 0);
 
 // --- smoke test -----------------------------------------------------------
 // Drive a whole session against a stubbed Zotero. This exists because a careless
