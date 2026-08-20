@@ -768,6 +768,18 @@ function heatmapWeeks(rows, now, weeks = 53) {
 // Five buckets, GitHub-style: nothing, a look, a sitting, a session, a day of it.
 const level = (sec) => sec <= 0 ? 0 : sec < 900 ? 1 : sec < 2700 ? 2 : sec < 7200 ? 3 : 4;
 
+// Session rows carry the title the item had when they were logged, so renaming
+// an item in Zotero would leave its past sessions showing the old name. Ask the
+// item what it is called now, and fall back to the stored name for items that
+// no longer exist — which is the reason to keep storing it at all.
+function currentTitle(e) {
+	return safe(() => {
+		const id = Zotero.Items.getIDFromLibraryAndKey(e.libraryID, e.itemKey);
+		const item = id && Zotero.Items.get(id);
+		return (item && item.getDisplayTitle()) || null;
+	}, null);
+}
+
 function dayLabel(ms) {
 	if (ms === startOfDay(Date.now())) return "Today";
 	if (ms === startOfDay(Date.now() - DAY)) return "Yesterday";
@@ -996,7 +1008,7 @@ function buildHistory(win) {
 		for (const e of d.items) {
 			const row = el(doc, "div", "item");
 			const caret = el(doc, "span", "caret", "▸");
-			row.append(caret, el(doc, "span", "t", e.title || "(untitled)"),
+			row.append(caret, el(doc, "span", "t", currentTitle(e) || e.title || "(untitled)"),
 				el(doc, "span", "n", e.sessions + (e.sessions === 1 ? " session" : " sessions")),
 				el(doc, "b", null, fmtTotal(e.seconds) || "0m"));
 			row.title = "Show this day's sessions";

@@ -48,7 +48,9 @@ CREATE TABLE sessions (
     id        TEXT PRIMARY KEY,
     libraryID INTEGER NOT NULL,
     itemKey   TEXT NOT NULL,
-    title     TEXT,                -- denormalised, as of when the session started
+    title     TEXT,                -- as of when the session ran; the history
+                                   -- window shows the item's current name and
+                                   -- falls back to this once it is deleted
     mode      TEXT NOT NULL,       -- stopwatch | pomodoro | manual
     started   INTEGER NOT NULL,    -- unix ms
     seconds   INTEGER NOT NULL     -- countable time; manual rows may be negative
