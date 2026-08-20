@@ -384,6 +384,8 @@ const CSS = `
 .rt-panel .rt-add input { flex:1; min-width:0; box-sizing:border-box; padding:4px 6px; font:12px sans-serif; }
 .rt-panel .rt-add button { flex:0 0 auto; }
 .rt-panel .rt-pom { display:flex; align-items:center; gap:6px; margin-top:8px; }
+/* a class rule with display beats the UA's [hidden], so say it again */
+.rt-panel .rt-pom[hidden] { display:none; }
 .rt-panel .rt-pom .rt-muted { flex:1; }
 .rt-panel .rt-pom button { flex:0 0 auto; padding:2px 8px; }
 `;
@@ -615,15 +617,21 @@ function fillPanel(doc, box, item) {
 	pom.append(pomLabel, less, more5);
 	box.insertBefore(pom, add);
 
+	// "Armed" is pomodoro chosen but not started: the length is on screen to be
+	// adjusted, and nothing is counting until Start.
+	let armed = false;
 	let key = null;
 	const refresh = () => {
 		pomLabel.textContent = `🍅 Focus ${focusMin}m`;
 		stats.forEach(([, get], i) => { values[i].textContent = fmtTotal(safe(get, 0)) || "0m"; });
 		const mine = isMine(item);
-		big.textContent = mine ? liveText() : "";
-		big.style.display = mine ? "" : "none";
+		const pomo = armed || (mine && timer.mode === "pomodoro");
+		big.textContent = mine ? liveText() : (armed ? "🍅 " + fmtClock(focusMin * 60) : "");
+		big.style.display = mine || armed ? "" : "none";
+		pom.hidden = !pomo;
 		// Rebuild the buttons only when the state they depend on changes.
-		const k = mine ? `${timer.mode}/${timer.running}/${timer.phase}` : (timer ? "other" : "idle");
+		const k = mine ? `${timer.mode}/${timer.running}/${timer.phase}`
+			: timer ? "other" : armed ? "armed" : "idle";
 		if (k === key) return;
 		key = k;
 		actions.replaceChildren();
@@ -632,10 +640,14 @@ function fillPanel(doc, box, item) {
 				button(timer.running ? "⏸ Pause" : "▶ Resume", () => setPaused(timer.running)),
 				button("⏹ Stop", () => stop()));
 			if (timer.mode === "pomodoro") actions.append(button("⏭ Skip", () => nextPhase(false)));
+		} else if (armed) {
+			actions.append(
+				button("▶ Start", () => { armed = false; start("pomodoro", item); }),
+				button("Cancel", () => { armed = false; refresh(); }));
 		} else {
 			actions.append(
 				button("⏱ Stopwatch", () => start("stopwatch", item)),
-				button("🍅 Pomodoro", () => start("pomodoro", item)));
+				button("🍅 Pomodoro", () => { armed = true; refresh(); }));
 		}
 		note.textContent = k === "other" ? "A timer is running on another item." : "";
 	};
