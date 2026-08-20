@@ -109,14 +109,14 @@ assert.deepStrictEqual([0, 1, 899, 900, 2699, 2700, 7199, 7200].map(level), [0, 
 // edit once deleted refreshViews() and every caller kept "working" — the throw
 // happened after the important part, so nothing looked broken for six releases.
 const { __internals: I } = require("./bootstrap.js");
-const written = [];
+const written = [], logged = [];
 const attach = { id: 10, libraryID: 1, key: "ATT", parentID: 1 };
 const book = { id: 1, libraryID: 1, key: "BOOK", isRegularItem: () => true, getDisplayTitle: () => "Book" };
 Object.defineProperty(attach, "parentItem", { get() { return global.Zotero.Items.get(this.parentID); } });
 let openReaders = [{ itemID: 10 }];
 let refreshes = 0;
 global.Zotero = {
-	logError: (e) => { throw e; },                       // no silent failures in tests
+	logError: (e) => logged.push(e),   // checked below: only expected ones allowed
 	Items: { get: (id) => ({ 10: attach, 1: book }[id] || false) },
 	Reader: { get _readers() { return openReaders; } },
 	Utilities: { randomString: () => "id" + written.length },
@@ -145,6 +145,21 @@ I.setPaused(true);
 assert.strictEqual(I.getTimer().running, false, "pause stops the clock");
 I.setPaused(false);
 
+// Switching tabs must never look like closing one. An open reader whose item is
+// briefly out of Zotero's cache resolves to nothing; that is "can't tell", not
+// "closed", and a timer must survive it.
+let unloaded = false;
+const cachedGet = global.Zotero.Items.get;
+global.Zotero.Items.get = (id) => {
+	if (unloaded) { const e = new Error("not yet loaded"); e.name = "UnloadedDataException"; throw e; }
+	return cachedGet(id);
+};
+unloaded = true;
+I.checkOrphaned(); I.checkOrphaned(); I.checkOrphaned();
+assert.ok(I.getTimer(), "an unresolvable item is not a closed tab");
+unloaded = false;
+global.Zotero.Items.get = cachedGet;
+
 // Closing the book stops the timer — after one grace check, not immediately.
 openReaders = [];
 I.checkOrphaned();
@@ -155,5 +170,9 @@ assert.strictEqual(I.log.length, 1, "the session is kept, not dropped");
 assert.strictEqual(I.log[0].seconds, 120, "with its time intact");
 assert.ok(refreshes > 0, "the column and item pane get refreshed");
 assert.ok(written.includes("UPDATE"), "the final duration is written");
+
+// The only failures the run may swallow are the cache misses we staged.
+assert.deepStrictEqual([...new Set(logged.map((e) => e.name))].sort(), ["UnloadedDataException"],
+	"unexpected errors were swallowed: " + logged.map((e) => e.message).join("; "));
 
 console.log("ok");

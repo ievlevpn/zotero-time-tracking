@@ -371,12 +371,24 @@ function alertPhase() {
 // anywhere is counting time nobody is spending, and with its toolbar gone there
 // is nothing on screen to notice it by. Two strikes a few seconds apart, so a
 // reader that is merely mid-initialisation doesn't count as closed.
+// Three answers, not two: open, not open, or "can't tell". A reader whose item
+// isn't in Zotero's cache right now resolves to null, and counting that as
+// closed would stop a timer on a tab sitting right in front of you — which is
+// easy to hit while switching tabs, since that is when items load and unload.
 function readerOpenFor(id) {
-	return (Zotero.Reader._readers || []).some((r) => safe(() => idFor(r), null) === id);
+	const readers = Zotero.Reader._readers || [];
+	if (!readers.length) return false;                    // nothing open anywhere
+	const ids = readers.map((r) => safe(() => idFor(r), null));
+	if (ids.includes(id)) return true;
+	return ids.some(Boolean) ? false : null;              // none resolved → unknown
 }
 
 function checkOrphaned() {
-	if (readerOpenFor(timer.id)) { timer.orphaned = 0; return; }
+	const open = readerOpenFor(timer.id);
+	if (open !== false) {
+		if (open) timer.orphaned = 0;   // null: hold the count, we simply don't know
+		return;
+	}
 	if ((timer.orphaned = (timer.orphaned || 0) + 1) < 2) return;
 	const kept = fmtTotal(timer.counted);
 	const what = timer.row && timer.row.title;

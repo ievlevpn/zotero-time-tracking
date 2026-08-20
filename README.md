@@ -116,7 +116,8 @@ folder, then restart Zotero.
 - **Closing the book stops the timer.** A timer whose item has no reader open
   anywhere is counting time nobody is spending, and with its toolbar gone there
   is nothing on screen to notice it by. It stops, keeps what it counted, and
-  says so.
+  says so. Only on certainty: an open tab whose item Zotero hasn't loaded reads
+  as "don't know", never as closed, so switching tabs can't stop your timer.
 - **One timer at a time.** Two running at once would double-count the same
   stretch of time, so starting one on another item asks before taking over —
   it never switches silently.
