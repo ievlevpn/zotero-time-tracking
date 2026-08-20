@@ -14,9 +14,12 @@
  * No build step: plain bootstrapped plugin. Zip the folder — see README.md.
  */
 
-// Pomodoro phase lengths, in minutes. Edit to taste.
-const FOCUS_MIN = 25;
+// Pomodoro phase lengths, in minutes. The focus length is adjustable from the
+// popup in 5-minute steps and remembered in a Zotero pref; the break isn't.
+const FOCUS_MIN = 25;     // default, before the pref is read
 const BREAK_MIN = 5;
+const FOCUS_PREF = "readingTime.focusMin";
+const FOCUS_RANGE = [5, 120];
 
 const CHECK_IN = 3600;    // seconds of counted time between "still reading?" prompts
 const FLUSH_EVERY = 60;   // seconds between DB writes while a timer runs
@@ -24,6 +27,7 @@ const MAX_STEP = 5;       // seconds; longer gaps mean the machine slept
 const DAY = 86400000;
 
 let active = false;       // between startup() and shutdown()
+let focusMin = FOCUS_MIN;
 let onRenderToolbar;
 let infoRowID = null;     // registration IDs come back namespaced with the
 let columnKey = null;     // plugin ID, so keep what register*() returns
@@ -37,7 +41,7 @@ let ticker = null;        // the one interval, running for the whole session
 let ticks = 0;
 let asking = false;       // a modal prompt is up; a modal spins the event loop,
                           // so the ticker can fire again while we wait
-const bars = new Map();   // container element → { reader, doc, btn, label, host }
+const bars = new Map();   // container element → { reader, doc, btn, label, host, id }
 let panel = null;         // the single open popup: { el, btn, cleanup, refresh }
 
 // --- duration parse/format -------------------------------------------------
@@ -218,7 +222,16 @@ function itemOf(reader) {
 
 // --- timer -----------------------------------------------------------------
 
-const phaseLen = () => (timer.phase === "focus" ? FOCUS_MIN : BREAK_MIN) * 60;
+const phaseLen = () => (timer.phase === "focus" ? focusMin : BREAK_MIN) * 60;
+
+// Adjusting a running focus phase changes what's left of it right away — down
+// far enough and it simply ends, which is the honest reading of "make it
+// shorter" while you're already past the new length.
+function bumpFocus(delta) {
+	focusMin = Math.min(FOCUS_RANGE[1], Math.max(FOCUS_RANGE[0], focusMin + delta));
+	safe(() => Zotero.Prefs.set(FOCUS_PREF, focusMin));
+	paint();
+}
 
 // Fold the currently-running segment into the accumulators, so everything else
 // can just read them — including the live row, which keeps today's total honest
@@ -330,7 +343,7 @@ function alertPhase() {
 	const focus = timer.phase === "focus";
 	try {
 		const pw = new Zotero.ProgressWindow({ closeOnClick: true });
-		pw.changeHeadline(focus ? `🍅 Break over — ${FOCUS_MIN} min of reading` : `☕ Time for a ${BREAK_MIN} min break`);
+		pw.changeHeadline(focus ? `🍅 Break over — ${focusMin} min of reading` : `☕ Time for a ${BREAK_MIN} min break`);
 		pw.show();
 		pw.startCloseTimer(6000);
 		Components.classes["@mozilla.org/sound;1"].getService(Components.interfaces.nsISound).beep();
@@ -370,6 +383,9 @@ const CSS = `
 .rt-panel .rt-add { display:flex; gap:6px; margin-top:8px; border-top:1px solid GrayText; padding-top:8px; }
 .rt-panel .rt-add input { flex:1; min-width:0; box-sizing:border-box; padding:4px 6px; font:12px sans-serif; }
 .rt-panel .rt-add button { flex:0 0 auto; }
+.rt-panel .rt-pom { display:flex; align-items:center; gap:6px; margin-top:8px; }
+.rt-panel .rt-pom .rt-muted { flex:1; }
+.rt-panel .rt-pom button { flex:0 0 auto; padding:2px 8px; }
 `;
 
 function injectCSS(doc) {
@@ -378,6 +394,16 @@ function injectCSS(doc) {
 	style.id = "rt-css";
 	style.textContent = CSS;
 	(doc.head || doc.documentElement).append(style);
+}
+
+// A toolbar's item, resolved once and kept. Resolving it per tick meant a
+// single Items.get() miss — it throws UnloadedDataException for an id that is
+// known but not in the cache — blanked the live time in both the button and the
+// popup while the timer went on counting. The id can't change for a given
+// reader, so there is nothing to re-resolve.
+function idFor(reader) {
+	const item = itemOf(reader);
+	return item ? idOf(item) : null;
 }
 
 // Build the clock button and its live-time label.
@@ -401,7 +427,7 @@ function renderButton(event) {
 	const { btn, label } = makeButton(doc, reader);
 	append(btn);
 	const host = (btn.parentElement && btn.parentElement.parentElement) || null;
-	bars.set(host || doc, { reader, doc, btn, label, host });
+	bars.set(host || doc, { reader, doc, btn, label, host, id: idFor(reader) });
 	paint();
 }
 
@@ -424,7 +450,7 @@ function adoptOpenReaders() {
 		const host = doc && doc.querySelector(".toolbar .custom-sections");
 		if (!host || bars.has(host)) return;
 		injectCSS(doc);
-		const bar = { reader, doc, host, btn: null, label: null };
+		const bar = { reader, doc, host, btn: null, label: null, id: idFor(reader) };
 		restoreButton(bar);
 		bars.set(host, bar);
 	});
@@ -434,6 +460,7 @@ function adoptOpenReaders() {
 function paint() {
 	for (const [key, bar] of [...bars]) {
 		if (!bar.doc.defaultView) { bars.delete(key); continue; }  // reader tab closed
+		if (!bar.id) bar.id = idFor(bar.reader);   // wasn't loaded yet when we rendered
 		if (!bar.btn.isConnected) {
 			// Zotero dispatches renderToolbar to every plugin from a single
 			// unguarded loop, so if a peer registered before us throws, our turn
@@ -443,7 +470,7 @@ function paint() {
 			safe(() => restoreButton(bar));
 			if (!bar.btn.isConnected) continue;
 		}
-		safe(() => { bar.label.textContent = isMine(itemOf(bar.reader)) ? liveText() : ""; });
+		safe(() => { bar.label.textContent = (timer && bar.id === timer.id) ? liveText() : ""; });
 	}
 	if (panel && !panel.el.isConnected) closePanel();  // document swapped under us
 	else if (panel) safe(() => panel.refresh());
@@ -569,8 +596,18 @@ function fillPanel(doc, box, item) {
 		return b;
 	};
 
+	// Focus length, adjustable before or during a run.
+	const pom = el(doc, "div", "rt-pom");
+	const pomLabel = el(doc, "span", "rt-muted");
+	const less = button("−5", () => bumpFocus(-5));
+	const more5 = button("+5", () => bumpFocus(5));
+	less.title = more5.title = "Pomodoro focus length";
+	pom.append(pomLabel, less, more5);
+	box.insertBefore(pom, add);
+
 	let key = null;
 	const refresh = () => {
+		pomLabel.textContent = `🍅 Focus ${focusMin}m`;
 		stats.forEach(([, get], i) => { values[i].textContent = fmtTotal(safe(get, 0)) || "0m"; });
 		const mine = isMine(item);
 		big.textContent = mine ? liveText() : "";
@@ -912,6 +949,7 @@ function buildHistory(win) {
 // background — until it lands, `db` is null and every writer bails.
 function startup({ id }) {
 	active = true;
+	focusMin = safe(() => Number(Zotero.Prefs.get(FOCUS_PREF)), 0) || FOCUS_MIN;
 	openDB().catch(oops);
 	onRenderToolbar = renderButton;
 	Zotero.Reader.registerEventListener("renderToolbar", onRenderToolbar, id);
