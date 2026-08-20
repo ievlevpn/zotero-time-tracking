@@ -304,6 +304,11 @@ function nextPhase(auto) {
 // ponytail: a fixed 1 Hz walk over at most a handful of open readers — make it
 // adaptive only if it ever shows up in a profile.
 function pulse() {
+	// Zotero deletes a plugin's scope on shutdown but does not nuke the sandbox,
+	// so an interval that outlives us keeps running. `active` is cleared first
+	// thing in shutdown, which stops an old instance from redrawing — or from
+	// putting its own toolbar button back next to the new instance's.
+	if (!active) return;
 	safe(() => (timer ? tick() : paint()));
 }
 
@@ -452,6 +457,7 @@ function adoptOpenReaders() {
 		const doc = reader._iframeWindow && reader._iframeWindow.document;
 		const host = doc && doc.querySelector(".toolbar .custom-sections");
 		if (!host || bars.has(host)) return;
+		for (const stray of host.querySelectorAll(".rt-btn")) (stray.parentElement || stray).remove();
 		injectCSS(doc);
 		const bar = { reader, doc, host, btn: null, label: null, id: idFor(reader) };
 		restoreButton(bar);
@@ -471,6 +477,13 @@ function paintBar(bar) {
 		// If the container is still there, put it back ourselves.
 		if (!bar.host || !bar.host.isConnected) return false;
 		restoreButton(bar);
+	}
+	// An older instance whose shutdown didn't finish can keep re-adding its own
+	// button beside ours. One toolbar, one clock: ours is the one in `bars`.
+	if (bar.host) {
+		for (const other of bar.host.querySelectorAll(".rt-btn")) {
+			if (other !== bar.btn) (other.parentElement || other).remove();
+		}
 	}
 	bar.label.textContent = (timer && bar.id === timer.id) ? liveText() : "";
 	return true;
@@ -1046,10 +1059,12 @@ function onMainWindowLoad({ window }) {
 function onMainWindowUnload() {}
 
 async function shutdown() {
+	// Order matters: stopping the clock cannot be left to code that might throw
+	// on the way there, or the old instance keeps ticking and redrawing.
 	active = false;
-	stop();
 	if (ticker) { clearInterval(ticker); ticker = null; }
-	closePanel();
+	safe(stop);
+	safe(closePanel);
 	for (const bar of bars.values()) safe(() => bar.btn.remove());
 	bars.clear();
 	if (onRenderToolbar && Zotero.Reader.unregisterEventListener) {
