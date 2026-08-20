@@ -30,7 +30,7 @@ const out = { addons: { [z.id]: { updates: [{
 fs.writeFileSync("update.json", JSON.stringify(out, null, 2) + "\n");
 '
 
-git add manifest.json bootstrap.js locale icons update.json
+git add -A   # everything but the .xpi, which .gitignore covers
 git commit -m "Release v$VER" || echo "(nothing to commit)"
 git push
 

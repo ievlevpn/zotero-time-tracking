@@ -4,8 +4,11 @@ Adds a 🕐 button to the reader toolbar. Click it for a small popup with three
 ways to log time on the item you're reading:
 
 - **⏱ Stopwatch** — counts up until you pause or stop.
-- **🍅 Pomodoro** — 25 min focus / 5 min break, with a chime and a notification
-  at each switch. Breaks don't count toward reading time.
+- **🍅 Pomodoro** — clicking it doesn't start anything: the length appears with
+  `−5` / `+5` to adjust (5–120 min) and a **▶ Start** button. Then focus / 5 min
+  break, with a chime and a notification at each switch; breaks don't count
+  toward reading time. The length can still be adjusted mid-run, and is
+  remembered in `extensions.zotero.readingTime.focusMin`.
 - **Manual entry** — type `25`, `1h 30m`, `45s`, or `-10` to subtract.
 
 While a timer runs the live time sits inside the clock button, so you can close
@@ -100,7 +103,8 @@ folder, then restart Zotero.
 
 ## Tweak it
 
-- `FOCUS_MIN` / `BREAK_MIN` at the top of `bootstrap.js` set the pomodoro phases.
+- The pomodoro focus length lives in the popup (`−5` / `+5`); `BREAK_MIN` at the
+  top of `bootstrap.js` sets the break.
 - `node test.js` runs the self-check for duration parsing/formatting and the
   session-log sums.
 
@@ -117,6 +121,12 @@ folder, then restart Zotero.
   `CHECK_IN` in `bootstrap.js` to adjust.
 
 ## Caveats
+
+- The button puts itself back. Zotero hands `renderToolbar` to every plugin
+  from one unguarded loop and the reader wipes the container on each render,
+  so a peer plugin that throws first takes our button down with it. A 1 Hz
+  check restores it, and open readers are claimed on startup so upgrading the
+  plugin doesn't leave already-open tabs without it.
 
 - **No idle detection.** The stopwatch keeps counting if you walk away — pause
   it, or use the pomodoro. Machine sleep isn't counted (gaps over 5 s are
