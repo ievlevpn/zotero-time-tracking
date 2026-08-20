@@ -10,6 +10,22 @@ XPI="reading-time.xpi"
 VER=$(node -p "require('./manifest.json').version")
 
 node test.js
+
+# Changelog = commits since the previous tag, worked out before anything is
+# pushed. Fetch tags first: gh creates tags remotely, so local tags go stale and
+# git describe would pick an old one, repeating already-shipped changes.
+git fetch --tags -q || true
+PREV=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+CHANGES=$(git log --no-merges --pretty='- %s' ${PREV:+$PREV..HEAD} | grep -v '^- Release v' || true)
+if [ -z "$CHANGES" ]; then
+  if [ -n "$PREV" ]; then
+    echo "Nothing to describe since $PREV. Commit the work with a real message" >&2
+    echo "before releasing, or every release gets the same empty changelog." >&2
+    exit 1
+  fi
+  CHANGES="- Initial release"
+fi
+
 rm -f "$XPI"
 zip -q -r "$XPI" manifest.json bootstrap.js locale icons
 
@@ -33,15 +49,6 @@ fs.writeFileSync("update.json", JSON.stringify(out, null, 2) + "\n");
 git add -A   # everything but the .xpi, which .gitignore covers
 git commit -m "Release v$VER" || echo "(nothing to commit)"
 git push
-
-# Changelog = commits since the previous tag (drop the "Release vX" commits).
-# Fetch tags first: gh creates tags remotely, so local tags go stale and
-# git describe would pick an old one, repeating already-shipped changes.
-git fetch --tags -q || true
-PREV=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-RANGE=${PREV:+$PREV..HEAD}
-CHANGES=$(git log --no-merges --pretty='- %s' $RANGE | grep -v '^- Release v' || true)
-[ -z "$CHANGES" ] && CHANGES="- Initial release"
 
 NOTES="## What's changed
 $CHANGES
