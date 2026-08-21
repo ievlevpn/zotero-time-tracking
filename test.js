@@ -1,6 +1,6 @@
 // Self-check for the pure helpers: `node test.js`.
 const assert = require("assert");
-const { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, historyByDay, heatmapWeeks, level, rollUp } = require("./bootstrap.js");
+const { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, historyByDay, heatmapWeeks, level, rollUp, fuzzy } = require("./bootstrap.js");
 
 // A bare number means minutes; h/m/s are honoured; junk is ignored.
 assert.strictEqual(parseDuration("25"), 1500);
@@ -103,6 +103,16 @@ assert.ok(cells.every((c, i) => i === 0 || c.day > cells[i - 1].day));
 assert.ok(cells.every((c) => new Date(c.day).getHours() === 0));
 
 assert.deepStrictEqual([0, 1, 899, 900, 2699, 2700, 7199, 7200].map(level), [0, 1, 1, 2, 2, 3, 3, 4]);
+
+// Fuzzy collection filter: subsequence, case handled by the caller.
+assert.ok(fuzzy("", "anything"));                  // empty query matches all
+assert.ok(fuzzy("mdv", "medieval europe"));        // gaps are fine
+assert.ok(fuzzy("medieval", "medieval europe"));
+assert.ok(fuzzy("europe", "medieval europe"));
+assert.ok(!fuzzy("veidem", "medieval europe"));    // order matters
+assert.ok(!fuzzy("medievalx", "medieval europe"));
+assert.ok(fuzzy("me", "me"));
+assert.ok(!fuzzy("mee", "me"));
 
 // Per-collection rollup. An item in two collections counts in both, so the
 // group totals can exceed the time actually spent — that is deliberate.

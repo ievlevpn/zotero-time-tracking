@@ -793,6 +793,17 @@ function currentTitle(e) {
 	}, null);
 }
 
+// Classic subsequence match: every character of the query appears in the text,
+// in order, not necessarily adjacent. "mdv" finds "Medieval Europe".
+function fuzzy(q, text) {
+	if (!q) return true;
+	let i = 0;
+	for (let j = 0; j < text.length && i < q.length; j++) {
+		if (text[j] === q[i]) i++;
+	}
+	return i === q.length;
+}
+
 // Sum seconds per group, given a lookup from a row to the groups it belongs to.
 // An item in several collections counts in each of them, so these totals can
 // add up to more than the time actually spent — that is the honest answer to
@@ -874,6 +885,10 @@ h1 { font-size:15px; margin:0 0 12px; }
 .top button:hover, .session button:hover { background:Highlight; color:HighlightText; }
 .item .caret { color:GrayText; font-size:9px; width:9px; }
 .coll { padding-left:10px; }
+.nav { display:flex; gap:4px; }
+.top button.on { background:Highlight; color:HighlightText; }
+.search { width:100%; box-sizing:border-box; margin:12px 0 0; padding:5px 8px;
+	font:13px sans-serif; background:Canvas; color:CanvasText; border:1px solid GrayText; border-radius:5px; }
 .day .rt-muted { font-weight:400; }
 .item:hover .caret { color:HighlightText; }
 .sessions { margin:0 0 4px 18px; }
@@ -908,6 +923,7 @@ body { --l0:#ebedf0; --l1:#9be9a8; --l2:#40c463; --l3:#30a14e; --l4:#216e39; }
 `;
 
 let historyWin = null;
+let historyView = "days";   // "days" | "collections"
 let historyFilter = null;   // { title, match(row) } — one item, one collection, or null
 
 const inFilter = (r) => !historyFilter || historyFilter.match(r);
@@ -1048,6 +1064,46 @@ function deleteSession(win, r) {
 	safe(() => buildHistory(win));
 }
 
+// Its own view rather than a block in the day list: collections answer a
+// different question, and the day list is long enough already.
+function buildCollections(doc, win, rows) {
+	const colls = byCollection(rows);
+	const search = doc.createElement("input");
+	search.type = "search";
+	search.className = "search";
+	search.placeholder = "Filter collections…";
+	const list = el(doc, "div");
+	const note = el(doc, "div", "day");
+	note.append(el(doc, "span", null, "By collection"),
+		el(doc, "span", "rt-muted", "sub-collections included"));
+	doc.body.append(search, note, list);
+
+	const render = () => {
+		list.replaceChildren();
+		const shown = colls.filter((c) => fuzzy(search.value.trim().toLowerCase(), c.name.toLowerCase()));
+		if (!shown.length) {
+			list.append(el(doc, "div", "empty", colls.length ? "No collections match." : "No reading in any collection yet."));
+			return;
+		}
+		for (const c of shown) {
+			const row = el(doc, "div", "item coll");
+			row.append(el(doc, "span", "t", c.name), el(doc, "b", null, fmtTotal(c.seconds) || "0m"));
+			row.title = "Show only this collection";
+			row.addEventListener("click", () => safe(() => {
+				const collection = Zotero.Collections.get(c.id);
+				if (!collection) return;
+				historyFilter = collectionFilter(collection);
+				historyView = "days";          // narrowed: show it on the timeline
+				buildHistory(win);
+			}));
+			list.append(row);
+		}
+	};
+	search.addEventListener("input", render);
+	render();
+	search.focus();
+}
+
 function buildHistory(win) {
 	const doc = win.document;
 	const main = Zotero.getMainWindow();
@@ -1057,11 +1113,18 @@ function buildHistory(win) {
 
 	const head = el(doc, "div", "top");
 	head.append(el(doc, "h1", null, historyFilter ? historyFilter.title : "Reading time"));
+	const nav = el(doc, "div", "nav");
 	if (historyFilter) {
-		const all = el(doc, "button", null, "← All items");
+		const all = el(doc, "button", null, "← All");
 		all.addEventListener("click", () => { historyFilter = null; safe(() => buildHistory(win)); });
-		head.append(all);
+		nav.append(all);
 	}
+	for (const [id, label] of [["days", "Days"], ["collections", "Collections"]]) {
+		const tab = el(doc, "button", historyView === id ? "on" : null, label);
+		tab.addEventListener("click", () => { historyView = id; safe(() => buildHistory(win)); });
+		nav.append(tab);
+	}
+	head.append(nav);
 	doc.body.replaceChildren(head);
 
 	const sums = el(doc, "div", "sums");
@@ -1074,33 +1137,8 @@ function buildHistory(win) {
 		sums.append(box);
 	}
 	doc.body.append(sums);
+	if (historyView === "collections") return buildCollections(doc, win, rows);
 	doc.body.append(...heatmapEls(doc, rows));
-
-	const colls = byCollection(rows);
-	if (colls.length > 1) {
-		const head2 = el(doc, "div", "day");
-		head2.append(el(doc, "span", null, "By collection"),
-			el(doc, "span", "rt-muted", "sub-collections included"));
-		doc.body.append(head2);
-		const SHOWN = 12;
-		for (const c of colls.slice(0, SHOWN)) {
-			const row = el(doc, "div", "item coll");
-			row.append(el(doc, "span", "t", c.name), el(doc, "b", null, fmtTotal(c.seconds) || "0m"));
-			row.title = "Show only this collection";
-			row.addEventListener("click", () => safe(() => {
-				const collection = Zotero.Collections.get(c.id);
-				if (!collection) return;
-				historyFilter = collectionFilter(collection);
-				buildHistory(win);
-			}));
-			doc.body.append(row);
-		}
-		// No silent truncation: say what was left out.
-		if (colls.length > SHOWN) {
-			doc.body.append(el(doc, "div", "item rt-muted",
-				`+${colls.length - SHOWN} more collections`));
-		}
-	}
 
 	const days = historyByDay(rows);
 	if (!days.length) {
@@ -1262,7 +1300,7 @@ function uninstall() {}
 
 // node-only: lets test.js import the pure helpers; no-op inside Zotero.
 if (typeof module !== "undefined") {
-	module.exports = { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, historyByDay, heatmapWeeks, level, rollUp };
+	module.exports = { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, historyByDay, heatmapWeeks, level, rollUp, fuzzy };
 	// Enough of the machinery for test.js to drive a whole session. A smoke test
 	// is what catches an edit that quietly deletes a function everything calls.
 	module.exports.__internals = {
