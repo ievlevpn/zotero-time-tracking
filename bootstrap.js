@@ -1,4 +1,4 @@
-/* Reading Time — a tiny Zotero plugin (bootstrapped, Zotero 7+).
+/* Reading Time — a tiny Zotero plugin (bootstrapped, Zotero 10).
  *
  * Adds a clock button to the reader toolbar with a stopwatch, a pomodoro
  * timer and manual time entry.

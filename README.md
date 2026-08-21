@@ -1,5 +1,9 @@
 # Reading Time (Zotero plugin)
 
+Built for **Zotero 10**. It uses plugin APIs that arrived across the 7.x line —
+reader toolbar events, custom item-tree columns, item-pane info rows, and the
+menu API — and is only tested against 10.
+
 Adds a 🕐 button to the reader toolbar. Click it for a small popup with three
 ways to log time on the item you're reading:
 
@@ -96,6 +100,17 @@ database: no WAL, no idle backups, and no integrity-check dialog at startup —
 a time log should never be able to interrupt Zotero. Back it up yourself if you
 care about it. Zotero holds the file open while it runs, so read it with
 `sqlite3 -readonly`, or close Zotero first.
+
+## Compatibility
+
+`manifest.json` declares `strict_min_version: "9.999"` rather than `"10.0"`.
+Zotero's own pre-releases version themselves as `10.0-beta.N`, and Mozilla's
+comparator sorts a pre-release suffix *below* the plain number — so a minimum of
+`"10.0"` would lock the plugin out of every Zotero 10 beta. The `.999` idiom is
+the same one Zotero's own plugin templates used for the 7.0 betas.
+
+`strict_max_version` is `"10.*"`, so the plugin will need a look before it runs
+on Zotero 11.
 
 ## Install (dev)
 
