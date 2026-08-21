@@ -1235,8 +1235,14 @@ function startup({ id }) {
 		menus: [{
 			menuType: "menuitem",
 			l10nID: "reading-time-collection-history-menu",
-			onCommand: () => safe(() => {
-				const collection = Zotero.getMainWindow().ZoteroPane.getSelectedCollection();
+			// ZoteroPane.getSelectedCollection() was removed in Zotero 10 and now
+			// throws, which safe() swallowed — the menu item simply did nothing.
+			// The row the menu was opened on is better evidence than the selection
+			// anyway. A library root or a saved search isn't a collection, so
+			// those open the window unscoped rather than doing nothing.
+			onCommand: (ev, ctx) => safe(() => {
+				const row = ctx && ctx.collectionTreeRows && ctx.collectionTreeRows[0];
+				const collection = row && row.isCollection && row.isCollection() ? row.ref : null;
 				openHistory(collection ? collectionFilter(collection) : null);
 			}),
 		}],
@@ -1248,9 +1254,10 @@ function startup({ id }) {
 		menus: [{
 			menuType: "menuitem",
 			l10nID: "reading-time-item-history-menu",
-			onCommand: () => safe(() => {
-				const items = Zotero.getMainWindow().ZoteroPane.getSelectedItems();
-				const item = items && items[0];
+			// Same reasoning: take the item from the menu's own context rather
+			// than re-deriving it from the pane's selection.
+			onCommand: (ev, ctx) => safe(() => {
+				const item = ctx && ctx.items && ctx.items[0];
 				const target = item && (item.parentItem || item);
 				openHistory(target ? itemFilter(target) : null);
 			}),
