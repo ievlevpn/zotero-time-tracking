@@ -190,7 +190,19 @@ async function closeDB() {
 	if (conn) await conn.closeDatabase().catch(oops);
 }
 
-const oops = (e) => Zotero.logError(e);
+// Zotero's debug viewer turns debug output on globally while it is open and
+// renders one DOM node per line, so anything failing repeatedly on the 1 Hz
+// pulse would bury the log someone is trying to read. Identical messages are
+// reported at most once a minute; a different one always gets through.
+let lastOops = "", lastOopsAt = 0;
+function oops(e) {
+	const message = String((e && e.message) || e);
+	const now = Date.now();
+	if (message === lastOops && now - lastOopsAt < 60000) return;
+	lastOops = message;
+	lastOopsAt = now;
+	Zotero.logError(e);
+}
 
 // Zotero dispatches renderToolbar to every plugin from one unguarded loop, so a
 // throw in our hook silently kills the toolbar buttons of every plugin after us
