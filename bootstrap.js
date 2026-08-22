@@ -38,6 +38,7 @@ let collectionMenuID = null;
 let db = null;            // the usable connection, or null
 let dbConn = null;        // every connection we open, usable or not — see openDB()
 const log = [];           // every session row, mirrored from the DB
+const goals = [];         // every goal row, likewise — there are only ever a few
 let timer = null;         // the single active timer, or null — see start()
 let ticker = null;        // the one interval, running for the whole session
 let ticks = 0;
@@ -62,7 +63,9 @@ function parseDuration(str) {
 function fmtTotal(sec) {
 	if (Math.abs(sec) < 60) return sec ? Math.round(sec) + "s" : "";
 	const min = Math.round(sec / 60);
-	return Math.abs(min) >= 60 ? `${(min / 60 | 0)}h ${Math.abs(min % 60)}m` : `${min}m`;
+	if (Math.abs(min) < 60) return `${min}m`;
+	const rest = Math.abs(min % 60);
+	return rest ? `${(min / 60 | 0)}h ${rest}m` : `${(min / 60 | 0)}h`;   // "20h", not "20h 0m"
 }
 
 // The item tree compares cells as strings, so the library column's cell value
@@ -99,6 +102,34 @@ const SCHEMA = [
 
 const COLS = ["id", "libraryID", "itemKey", "title", "mode", "started", "seconds"];
 
+// One row per goal. Keyed by item/collection key rather than a numeric id so a
+// goal survives anything that renumbers rows, and matching `sessions` in using
+// libraryID: whatever translates one table for another machine translates both.
+const GOAL_SCHEMA = [
+	`CREATE TABLE IF NOT EXISTS goals (
+		id         TEXT PRIMARY KEY,
+		libraryID  INTEGER NOT NULL,
+		scope      TEXT NOT NULL CHECK (scope IN ('item', 'collection', 'all')),
+		key        TEXT,                      -- item/collection key; NULL for 'all'
+		seconds    INTEGER NOT NULL CHECK (seconds > 0),
+		period     TEXT NOT NULL CHECK (period IN ('total', 'day', 'week', 'month')),
+		deadline   INTEGER,                   -- unix ms; only meaningful with 'total'
+		notifiedAt INTEGER,                   -- when this goal was last announced
+		updatedAt  INTEGER NOT NULL
+	)`,
+	// One goal per target per period. IFNULL, because SQLite counts NULLs as
+	// distinct and 'all' goals would otherwise multiply freely.
+	`CREATE UNIQUE INDEX IF NOT EXISTS goals_target
+		ON goals (libraryID, scope, IFNULL(key, ''), period)`,
+];
+
+const GOAL_COLS = ["id", "libraryID", "scope", "key", "seconds", "period", "deadline", "notifiedAt", "updatedAt"];
+
+// Bump when a change needs more than a new table: CREATE TABLE IF NOT EXISTS
+// covers new tables on old files, but nothing else. Numbered steps go in
+// migrate(); there are none yet, because v1 only adds tables.
+const DB_VERSION = 1;
+
 // <Zotero data dir>/time-tracker.sqlite — ours alone, next to zotero.sqlite.
 //
 // Opened by absolute path on purpose: that marks it an "external" DB, which
@@ -116,14 +147,20 @@ async function openDB() {
 	if (dbConn) await closeDB();   // never run two connections at once
 	const conn = new Zotero.DBConnection(Zotero.DataDirectory.getDatabase("time-tracker"));
 	dbConn = conn;
-	log.length = 0;   // a reopen must not double every session
+	log.length = 0;    // a reopen must not double every session
+	goals.length = 0;
 	try {
 		// Best effort: an old version's leftover -wal can make this fail with
 		// SQLITE_BUSY, and that must not take the rest of the open down with it.
 		await conn.queryAsync("PRAGMA journal_mode = DELETE").catch(oops);
-		for (const sql of SCHEMA) await conn.queryAsync(sql);
+		for (const sql of SCHEMA.concat(GOAL_SCHEMA)) await conn.queryAsync(sql);
+		const version = Number(await conn.valueQueryAsync("PRAGMA user_version")) || 0;
+		if (version !== DB_VERSION) await conn.queryAsync(`PRAGMA user_version = ${DB_VERSION}`);
 		for (const row of await conn.queryAsync("SELECT * FROM sessions ORDER BY started")) {
 			log.push(Object.fromEntries(COLS.map((c) => [c, row[c]])));  // rows are proxies
+		}
+		for (const row of await conn.queryAsync("SELECT * FROM goals")) {
+			goals.push(Object.fromEntries(GOAL_COLS.map((c) => [c, row[c]])));
 		}
 	}
 	catch (e) {
@@ -205,6 +242,23 @@ function saveRow(row) {
 	if (!db) return;   // nothing to write to; the in-memory log still has it
 	db.queryAsync("UPDATE sessions SET seconds = ?, title = ? WHERE id = ?",
 		[row.seconds, row.title, row.id]).catch(oops);
+}
+
+// Upsert: the unique index makes "set a goal" replace the one already on that
+// target for that period, rather than quietly stacking a second.
+function saveGoal(goal) {
+	goal.updatedAt = Date.now();
+	if (!goals.includes(goal)) goals.push(goal);
+	if (!db) return;
+	db.queryAsync(`INSERT OR REPLACE INTO goals (${GOAL_COLS.join(", ")}) VALUES (${GOAL_COLS.map(() => "?").join(", ")})`,
+		GOAL_COLS.map((c) => goal[c] === undefined ? null : goal[c])).catch(oops);
+}
+
+function dropGoal(goal) {
+	const i = goals.indexOf(goal);
+	if (i >= 0) goals.splice(i, 1);
+	if (!db) return;
+	db.queryAsync("DELETE FROM goals WHERE id = ?", [goal.id]).catch(oops);
 }
 
 function dropRow(row) {
@@ -325,7 +379,10 @@ function tick() {
 	// it — and reach paint() no matter which of them did what.
 	if (timer && timer.running && timer.counted >= timer.capAt) askCheckIn();
 	else if (timer && timer.mode === "pomodoro" && timer.running && timer.phaseElapsed >= phaseLen()) safe(() => nextPhase(true));
-	if (timer && timer.running && ticks % FLUSH_EVERY === 0) safe(() => saveRow(timer.row));
+	if (timer && timer.running && ticks % FLUSH_EVERY === 0) {
+		safe(() => saveRow(timer.row));
+		safe(checkGoals);   // a goal met mid-session shouldn't wait for the stop
+	}
 	paint();
 }
 
@@ -430,6 +487,11 @@ const CSS = `
 .rt-panel .rt-add { display:flex; gap:6px; margin-top:8px; border-top:1px solid GrayText; padding-top:8px; }
 .rt-panel .rt-add input { flex:1; min-width:0; box-sizing:border-box; padding:4px 6px; font:12px sans-serif; }
 .rt-panel .rt-add button { flex:0 0 auto; }
+.rt-panel .rt-goal { margin-top:8px; }
+.rt-panel .bar { height:6px; border-radius:3px; background:color-mix(in srgb, CanvasText 15%, Canvas);
+	overflow:hidden; margin-top:3px; }
+.rt-panel .bar i { display:block; height:100%; background:#40c463; }
+.rt-panel .bar i.done { background:#216e39; }
 .rt-panel .rt-pom { display:flex; align-items:center; gap:6px; margin-top:8px; }
 /* a class rule with display beats the UA's [hidden], so say it again */
 .rt-panel .rt-pom[hidden] { display:none; }
@@ -537,6 +599,7 @@ function refreshViews() {
 	if (!active) return;  // don't rebuild the item tree while Zotero is tearing down
 	try { if (columnKey) Zotero.ItemTreeManager.refreshColumns(); } catch (e) { oops(e); }
 	try { if (infoRowID) Zotero.ItemPaneManager.refreshInfoRow(infoRowID); } catch (e) { oops(e); }
+	safe(checkGoals);
 }
 
 function paint() {
@@ -681,6 +744,23 @@ function fillPanel(doc, box, item) {
 		return b;
 	};
 
+	// Goals covering this item. Membership is resolved once, here — not on every
+	// repaint — and only the two most specific are shown; the popup is 260px.
+	const mine = goalsFor(item).slice(0, 2);
+	const bars = mine.map((g) => {
+		const wrap = el(doc, "div", "rt-goal");
+		const head = el(doc, "div", "rt-row");
+		const label = el(doc, "span", "rt-muted");
+		const value = el(doc, "span", "rt-total");
+		head.append(label, value);
+		const bar = el(doc, "div", "bar");
+		const fill = el(doc, "i");
+		bar.append(fill);
+		wrap.append(head, bar);
+		box.insertBefore(wrap, add);
+		return { g, label, value, fill };
+	});
+
 	// Focus length, adjustable before or during a run.
 	const pom = el(doc, "div", "rt-pom");
 	const pomLabel = el(doc, "span", "rt-muted");
@@ -695,6 +775,14 @@ function fillPanel(doc, box, item) {
 	let armed = false;
 	let key = null;
 	const refresh = () => {
+		for (const b of bars) {
+			const matches = goalMatcher(b.g);
+			const { done, ratio } = matches ? goalProgress(log, b.g, matches, Date.now()) : { done: 0, ratio: 0 };
+			b.label.textContent = `${b.g.scope === "item" ? "Goal" : goalTitle(b.g) || "Goal"} ${periodLabel[b.g.period]}`;
+			b.value.textContent = `${fmtTotal(done) || "0m"} / ${fmtTotal(b.g.seconds)}`;
+			b.fill.style.width = Math.round(ratio * 100) + "%";
+			b.fill.className = ratio >= 1 ? "done" : "";
+		}
 		pomLabel.textContent = `🍅 Focus ${focusMin}m`;
 		stats.forEach(([, get], i) => { values[i].textContent = fmtTotal(safe(get, 0)) || "0m"; });
 		const mine = isMine(item);
@@ -793,6 +881,97 @@ function currentTitle(e) {
 	}, null);
 }
 
+// --- goals -----------------------------------------------------------------
+
+// Start of the window a goal is measured over. Local time, weeks from Monday —
+// the same conventions as the heatmap, or the numbers wouldn't agree.
+function periodStart(period, now) {
+	if (period === "total") return 0;
+	if (period === "day") return startOfDay(now);
+	if (period === "month") {
+		const d = new Date(now);
+		d.setDate(1); d.setHours(0, 0, 0, 0);
+		return d.getTime();
+	}
+	const d = new Date(startOfDay(now));       // week
+	d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+	return d.getTime();
+}
+
+// Pure: `matches` decides which sessions count, so the Zotero lookups stay out.
+function goalProgress(rows, goal, matches, now) {
+	const since = periodStart(goal.period, now);
+	let done = 0;
+	for (const r of rows) {
+		if (r.started >= since && matches(r)) done += r.seconds;
+	}
+	return { done, target: goal.seconds, ratio: Math.max(0, Math.min(1, done / goal.seconds)) };
+}
+
+// What you'd have to average from now on to land a deadline. null when there is
+// nothing to pace: no deadline, already done, or the day has arrived.
+function goalPace(goal, done, now) {
+	if (goal.period !== "total" || !goal.deadline || done >= goal.seconds) return null;
+	const days = Math.ceil((startOfDay(goal.deadline) - startOfDay(now)) / DAY) + 1;
+	return days > 0 ? { perDay: (goal.seconds - done) / days, days } : null;
+}
+
+const periodLabel = { total: "in total", day: "per day", week: "per week", month: "per month" };
+
+// The sessions a goal counts. Resolved when asked, never stored: collection
+// membership changes, and an orphaned goal must report itself rather than
+// silently matching nothing.
+function goalMatcher(g) {
+	if (g.scope === "all") return (r) => r.libraryID === g.libraryID;
+	if (g.scope === "item") return (r) => r.libraryID === g.libraryID && r.itemKey === g.key;
+	const collection = safe(() => Zotero.Collections.getByLibraryAndKey(g.libraryID, g.key), null);
+	return collection ? collectionFilter(collection).match : null;   // null → orphan
+}
+
+function goalTitle(g) {
+	if (g.scope === "all") return "All reading";
+	return safe(() => {
+		if (g.scope === "collection") {
+			const c = Zotero.Collections.getByLibraryAndKey(g.libraryID, g.key);
+			return c ? c.name : null;
+		}
+		const item = Zotero.Items.getByLibraryAndKey(g.libraryID, g.key);
+		return item ? item.getDisplayTitle() : null;
+	}, null);
+}
+
+// Goals covering one item: its own, its collections', and any library-wide one.
+// Membership is asked once by the caller, not on every repaint.
+function goalsFor(item) {
+	const cols = collectionsOf(item);
+	const keys = new Set();
+	for (const id of cols) {
+		const c = safe(() => Zotero.Collections.get(id), null);
+		if (c) keys.add(c.key);
+	}
+	return goals.filter((g) => g.libraryID === item.libraryID && (
+		g.scope === "all"
+		|| (g.scope === "item" && g.key === item.key)
+		|| (g.scope === "collection" && keys.has(g.key))))
+		.sort((a, b) => ({ item: 0, collection: 1, all: 2 })[a.scope] - ({ item: 0, collection: 1, all: 2 })[b.scope]);
+}
+
+// Announce a goal the moment it is met, once per period.
+function checkGoals() {
+	const now = Date.now();
+	for (const g of goals) {
+		const matches = goalMatcher(g);
+		if (!matches) continue;
+		const { done, ratio } = goalProgress(log, g, matches, now);
+		const since = periodStart(g.period, now);
+		if (ratio < 1) continue;
+		if (g.notifiedAt && g.notifiedAt >= since) continue;   // already said so this period
+		g.notifiedAt = now;
+		saveGoal(g);
+		notify(`🎯 Goal reached — ${fmtTotal(done)} ${periodLabel[g.period]} on ${goalTitle(g) || "a deleted item"}`);
+	}
+}
+
 // Classic subsequence match: every character of the query appears in the text,
 // in order, not necessarily adjacent. "mdv" finds "Medieval Europe".
 function fuzzy(q, text) {
@@ -887,6 +1066,23 @@ h1 { font-size:15px; margin:0 0 12px; }
 .coll { padding-left:10px; }
 .nav { display:flex; gap:4px; }
 .top button.on { background:Highlight; color:HighlightText; }
+.goal { margin:14px 0; }
+.goal-head { display:flex; align-items:baseline; gap:8px; }
+.goal-head .t { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
+.goal-head button { font:11px sans-serif; padding:0 5px; border:1px solid transparent; border-radius:4px;
+	background:transparent; color:CanvasText; cursor:pointer; }
+.goal-head button:hover { border-color:GrayText; }
+.bar { height:8px; border-radius:4px; background:var(--l0); overflow:hidden; margin:5px 0 3px; }
+.bar i { display:block; height:100%; background:var(--l2); }
+.bar i.done { background:var(--l4); }
+.editor { border:1px solid GrayText; border-radius:6px; padding:10px; margin:14px 0; }
+.editor-line { display:flex; gap:6px; margin-top:8px; align-items:center; }
+.editor input, .editor select { padding:4px 6px; font:12px sans-serif;
+	background:Canvas; color:CanvasText; border:1px solid GrayText; border-radius:4px; }
+.editor input[type=text] { flex:1; min-width:0; }
+.editor button { font:12px sans-serif; padding:4px 10px; border:1px solid GrayText; border-radius:5px;
+	background:transparent; color:CanvasText; cursor:pointer; }
+.editor button:hover { background:Highlight; color:HighlightText; }
 .search { width:100%; box-sizing:border-box; margin:12px 0 0; padding:5px 8px;
 	font:13px sans-serif; background:Canvas; color:CanvasText; border:1px solid GrayText; border-radius:5px; }
 .day .rt-muted { font-weight:400; }
@@ -923,7 +1119,8 @@ body { --l0:#ebedf0; --l1:#9be9a8; --l2:#40c463; --l3:#30a14e; --l4:#216e39; }
 `;
 
 let historyWin = null;
-let historyView = "days";   // "days" | "collections"
+let historyView = "days";   // "days" | "collections" | "goals"
+let goalDraft = null;       // the goal being edited, or a target waiting for one
 let historyFilter = null;   // { title, match(row) } — one item, one collection, or null
 
 const inFilter = (r) => !historyFilter || historyFilter.match(r);
@@ -1064,6 +1261,123 @@ function deleteSession(win, r) {
 	safe(() => buildHistory(win));
 }
 
+// Start (or resume) editing the goal for one target.
+function startGoal(target) {
+	const same = (g) => g.libraryID === target.libraryID && g.scope === target.scope
+		&& (g.key || null) === (target.key || null);
+	const existing = goals.filter(same);
+	goalDraft = existing.length
+		? Object.assign({}, existing[0], { title: target.title })
+		: Object.assign({ seconds: 3600, period: "week", deadline: null }, target);
+	historyView = "goals";
+	openHistory(null);
+}
+
+function goalEditor(doc, win) {
+	const box = el(doc, "div", "editor");
+	const title = goalDraft.title || goalTitle(goalDraft) || "this item";
+	box.append(el(doc, "div", "rt-muted", `Goal for “${title}”`));
+
+	const line = el(doc, "div", "editor-line");
+	const target = doc.createElement("input");
+	target.type = "text";
+	target.value = fmtTotal(goalDraft.seconds) || "1h";
+	target.placeholder = "3h, 45m, 20h";
+
+	const period = doc.createElement("select");
+	for (const [value, label] of [["day", "per day"], ["week", "per week"], ["month", "per month"], ["total", "in total"]]) {
+		const opt = doc.createElement("option");
+		opt.value = value;
+		opt.textContent = label;
+		if (goalDraft.period === value) opt.selected = true;
+		period.append(opt);
+	}
+
+	const by = doc.createElement("input");
+	by.type = "date";
+	by.title = "Deadline (optional)";
+	if (goalDraft.deadline) by.value = new Date(goalDraft.deadline).toISOString().slice(0, 10);
+	const showBy = () => { by.hidden = period.value !== "total"; };
+	period.addEventListener("change", showBy);
+	showBy();
+
+	line.append(target, period, by);
+	box.append(line);
+
+	const buttons = el(doc, "div", "editor-line");
+	const save = el(doc, "button", null, "Save goal");
+	save.addEventListener("click", () => safe(() => {
+		const seconds = Math.round(parseDuration(target.value));
+		if (seconds <= 0) { target.focus(); return; }
+		// A goal already on this target for this period is the one we're editing,
+		// whatever the draft started as — the unique index says so too.
+		const g = goals.find((x) => x.libraryID === goalDraft.libraryID && x.scope === goalDraft.scope
+			&& (x.key || null) === (goalDraft.key || null) && x.period === period.value)
+			|| { id: Zotero.Utilities.randomString(12), libraryID: goalDraft.libraryID, scope: goalDraft.scope, key: goalDraft.key || null };
+		Object.assign(g, {
+			seconds, period: period.value, notifiedAt: null,
+			deadline: period.value === "total" && by.value ? new Date(by.value + "T00:00:00").getTime() : null,
+		});
+		saveGoal(g);
+		goalDraft = null;
+		buildHistory(win);
+	}));
+	const cancel = el(doc, "button", null, "Cancel");
+	cancel.addEventListener("click", () => { goalDraft = null; safe(() => buildHistory(win)); });
+	buttons.append(save, cancel);
+	box.append(buttons);
+	return box;
+}
+
+function buildGoals(doc, win) {
+	if (goalDraft) doc.body.append(goalEditor(doc, win));
+
+	const now = Date.now();
+	const order = { item: 0, collection: 1, all: 2 };
+	const rows = goals.slice().sort((a, b) => order[a.scope] - order[b.scope] || b.seconds - a.seconds);
+
+	if (!rows.length) {
+		doc.body.append(el(doc, "div", "empty",
+			"No goals yet. Right-click a book or a collection in your library → Set reading goal…"));
+		return;
+	}
+
+	for (const g of rows) {
+		const matches = goalMatcher(g);
+		const name = goalTitle(g);
+		const { done, ratio } = matches ? goalProgress(log, g, matches, now) : { done: 0, ratio: 0 };
+
+		const box = el(doc, "div", "goal");
+		const head = el(doc, "div", "goal-head");
+		head.append(el(doc, "span", "t", name || "(deleted)"),
+			el(doc, "span", "rt-muted", `${fmtTotal(g.seconds)} ${periodLabel[g.period]}`),
+			el(doc, "b", null, `${fmtTotal(done) || "0m"} / ${fmtTotal(g.seconds)}`));
+
+		const edit = el(doc, "button", null, "✎");
+		edit.title = "Change this goal";
+		edit.addEventListener("click", () => { goalDraft = Object.assign({}, g, { title: name }); safe(() => buildHistory(win)); });
+		const del = el(doc, "button", null, "✕");
+		del.title = "Delete this goal";
+		del.addEventListener("click", () => { dropGoal(g); safe(() => buildHistory(win)); });
+		head.append(edit, del);
+		box.append(head);
+
+		const bar = el(doc, "div", "bar");
+		const fill = el(doc, "i");
+		fill.style.width = Math.round(ratio * 100) + "%";
+		if (ratio >= 1) fill.className = "done";
+		bar.append(fill);
+		box.append(bar);
+
+		const pace = matches && goalPace(g, done, now);
+		const foot = !matches ? "The item or collection this goal was set on is gone."
+			: pace ? `${fmtTotal(pace.perDay)} a day to finish by ${new Date(g.deadline).toLocaleDateString()}`
+			: ratio >= 1 ? "Done ✓" : `${fmtTotal(g.seconds - done)} to go`;
+		box.append(el(doc, "div", "rt-muted", foot));
+		doc.body.append(box);
+	}
+}
+
 // Its own view rather than a block in the day list: collections answer a
 // different question, and the day list is long enough already.
 function buildCollections(doc, win, rows) {
@@ -1119,13 +1433,15 @@ function buildHistory(win) {
 		all.addEventListener("click", () => { historyFilter = null; safe(() => buildHistory(win)); });
 		nav.append(all);
 	}
-	for (const [id, label] of [["days", "Days"], ["collections", "Collections"]]) {
+	for (const [id, label] of [["days", "Days"], ["collections", "Collections"], ["goals", "Goals"]]) {
 		const tab = el(doc, "button", historyView === id ? "on" : null, label);
 		tab.addEventListener("click", () => { historyView = id; safe(() => buildHistory(win)); });
 		nav.append(tab);
 	}
 	head.append(nav);
 	doc.body.replaceChildren(head);
+
+	if (historyView === "goals") return buildGoals(doc, win);
 
 	const sums = el(doc, "div", "sums");
 	const spans = [["Today", 0], ["Last 7 days", 6], ["Last 30 days", 29], ["All time", null]];
@@ -1234,6 +1550,15 @@ function startup({ id }) {
 		target: "main/library/collection",
 		menus: [{
 			menuType: "menuitem",
+			l10nID: "reading-time-collection-goal-menu",
+			onCommand: (ev, ctx) => safe(() => {
+				const row = ctx && ctx.collectionTreeRows && ctx.collectionTreeRows[0];
+				if (!(row && row.isCollection && row.isCollection())) return;
+				const c = row.ref;
+				startGoal({ libraryID: c.libraryID, scope: "collection", key: c.key, title: c.name });
+			}),
+		}, {
+			menuType: "menuitem",
 			l10nID: "reading-time-collection-history-menu",
 			// ZoteroPane.getSelectedCollection() was removed in Zotero 10 and now
 			// throws, which safe() swallowed — the menu item simply did nothing.
@@ -1252,6 +1577,15 @@ function startup({ id }) {
 		pluginID: id,
 		target: "main/library/item",
 		menus: [{
+			menuType: "menuitem",
+			l10nID: "reading-time-item-goal-menu",
+			onCommand: (ev, ctx) => safe(() => {
+				const item = ctx && ctx.items && ctx.items[0];
+				const target = item && (item.parentItem || item);
+				if (!target) return;
+				startGoal({ libraryID: target.libraryID, scope: "item", key: target.key, title: target.getDisplayTitle() });
+			}),
+		}, {
 			menuType: "menuitem",
 			l10nID: "reading-time-item-history-menu",
 			// Same reasoning: take the item from the menu's own context rather
@@ -1307,7 +1641,7 @@ function uninstall() {}
 
 // node-only: lets test.js import the pure helpers; no-op inside Zotero.
 if (typeof module !== "undefined") {
-	module.exports = { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, historyByDay, heatmapWeeks, level, rollUp, fuzzy };
+	module.exports = { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, historyByDay, heatmapWeeks, level, rollUp, fuzzy, periodStart, goalProgress, goalPace };
 	// Enough of the machinery for test.js to drive a whole session. A smoke test
 	// is what catches an edit that quietly deletes a function everything calls.
 	module.exports.__internals = {

@@ -52,6 +52,26 @@ Click one to narrow the window to it and drop back to the day view.
 Collection membership is asked of Zotero when you open the window, never stored:
 collections change, sessions don't.
 
+## Goals
+
+Right-click a book or a collection → **Set reading goal…**, or open the
+**Goals** tab in the history window. A goal is a target plus a period:
+
+- `20h` **in total**, optionally by a date — the window then shows the pace
+  you'd need (`38m a day to finish by 30 Sep`);
+- `3h` **per week**, or per day, or per month — progress resets each period.
+
+Collection goals count sub-collections, and an item counts towards both its own
+goal and any collection goal covering it. `All reading` goals cover the whole
+library. Whatever you're reading shows its two most relevant goals as bars in
+the reader popup, and a goal announces itself the moment it's met — once per
+period, not once per session.
+
+Goals live in a `goals` table beside the sessions, keyed by item/collection key
+rather than a numeric id, so they survive anything that renumbers rows. The
+target of a deleted item or collection is shown as *(deleted)* rather than being
+cleaned up behind your back.
+
 ## Storage
 
 Everything lands in **`time-tracker.sqlite`**, the plugin's own database next to

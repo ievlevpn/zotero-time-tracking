@@ -1,6 +1,6 @@
 // Self-check for the pure helpers: `node test.js`.
 const assert = require("assert");
-const { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, historyByDay, heatmapWeeks, level, rollUp, fuzzy } = require("./bootstrap.js");
+const { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, historyByDay, heatmapWeeks, level, rollUp, fuzzy, periodStart, goalProgress, goalPace } = require("./bootstrap.js");
 
 // A bare number means minutes; h/m/s are honoured; junk is ignored.
 assert.strictEqual(parseDuration("25"), 1500);
@@ -15,9 +15,11 @@ assert.strictEqual(fmtTotal(0), "");
 assert.strictEqual(fmtTotal(45), "45s");
 assert.strictEqual(fmtTotal(1500), "25m");
 assert.strictEqual(fmtTotal(4980), "1h 23m");
-assert.strictEqual(fmtTotal(3600), "1h 0m");
+assert.strictEqual(fmtTotal(3600), "1h");        // whole hours drop the "0m"
+assert.strictEqual(fmtTotal(72000), "20h");
 assert.strictEqual(fmtTotal(-1800), "-30m");   // manual subtractions can go negative
 assert.strictEqual(fmtTotal(-5400), "-1h 30m");
+assert.strictEqual(fmtTotal(-3600), "-1h");
 
 assert.strictEqual(fmtClock(0), "0:00");
 assert.strictEqual(fmtClock(65), "1:05");
@@ -124,6 +126,35 @@ assert.strictEqual([...groups.values()].reduce((a, b) => a + b), 12600);
 assert.ok([...groups.values()].reduce((a, b) => a + b) > sumSeconds(log), "overlap is counted twice, by design");
 assert.strictEqual(rollUp(log, () => []).size, 0);     // items in no collection
 assert.strictEqual(rollUp([], () => [1]).size, 0);
+
+// Goal periods. Same conventions as the heatmap: local time, Monday weeks.
+const noon = today + 12 * 3600e3;
+assert.strictEqual(periodStart("total", noon), 0);
+assert.strictEqual(periodStart("day", noon), today);
+assert.ok(periodStart("week", noon) <= today);
+assert.strictEqual(new Date(periodStart("week", noon)).getDay(), 1, "weeks start on Monday");
+assert.strictEqual(new Date(periodStart("month", noon)).getDate(), 1);
+assert.strictEqual(new Date(periodStart("month", noon)).getHours(), 0);
+assert.ok(noon - periodStart("week", noon) < 7 * DAY);
+
+// Progress: only sessions in the window and matching the goal count.
+const goal = { seconds: 3600, period: "day" };
+const mineOnly = (r) => r.itemKey === "AAAA";
+assert.deepStrictEqual(goalProgress(log, goal, mineOnly, noon), { done: 600, target: 3600, ratio: 600 / 3600 });
+assert.deepStrictEqual(goalProgress(log, goal, () => true, noon), { done: 1200, target: 3600, ratio: 1200 / 3600 });
+assert.strictEqual(goalProgress(log, { seconds: 3600, period: "total" }, mineOnly, noon).done, 6000);
+// Ratio is clamped, so an overshot goal doesn't overflow its bar.
+assert.strictEqual(goalProgress(log, { seconds: 60, period: "total" }, mineOnly, noon).ratio, 1);
+assert.strictEqual(goalProgress([], goal, () => true, noon).done, 0);
+
+// Pace: only for a dated total that is still short.
+const dated = { seconds: 7200, period: "total", deadline: today + 3 * DAY };
+assert.strictEqual(goalPace(dated, 3600, noon).days, 4);           // today counts
+assert.strictEqual(goalPace(dated, 3600, noon).perDay, 900);       // 1h left over 4 days
+assert.strictEqual(goalPace(dated, 7200, noon), null, "met goals need no pace");
+assert.strictEqual(goalPace({ seconds: 7200, period: "week" }, 0, noon), null);
+assert.strictEqual(goalPace({ seconds: 7200, period: "total" }, 0, noon), null, "no deadline, no pace");
+assert.strictEqual(goalPace({ ...dated, deadline: today - DAY }, 0, noon), null, "past due");
 
 // --- smoke test -----------------------------------------------------------
 // Drive a whole session against a stubbed Zotero. This exists because a careless
