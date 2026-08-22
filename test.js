@@ -1,6 +1,6 @@
 // Self-check for the pure helpers: `node test.js`.
 const assert = require("assert");
-const { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, historyByDay, heatmapWeeks, level, rollUp, fuzzy, periodStart, goalProgress, goalPace } = require("./bootstrap.js");
+const { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, historyByDay, heatmapWeeks, level, rollUp, fuzzy, periodStart, goalProgress, goalPace, canComplete } = require("./bootstrap.js");
 
 // A bare number means minutes; h/m/s are honoured; junk is ignored.
 assert.strictEqual(parseDuration("25"), 1500);
@@ -140,12 +140,22 @@ assert.ok(noon - periodStart("week", noon) < 7 * DAY);
 // Progress: only sessions in the window and matching the goal count.
 const goal = { seconds: 3600, period: "day" };
 const mineOnly = (r) => r.itemKey === "AAAA";
-assert.deepStrictEqual(goalProgress(log, goal, mineOnly, noon), { done: 600, target: 3600, ratio: 600 / 3600 });
-assert.deepStrictEqual(goalProgress(log, goal, () => true, noon), { done: 1200, target: 3600, ratio: 1200 / 3600 });
+assert.deepStrictEqual(goalProgress(log, goal, mineOnly, noon),
+	{ done: 600, target: 3600, complete: false, ratio: 600 / 3600 });
+assert.deepStrictEqual(goalProgress(log, goal, () => true, noon),
+	{ done: 1200, target: 3600, complete: false, ratio: 1200 / 3600 });
 assert.strictEqual(goalProgress(log, { seconds: 3600, period: "total" }, mineOnly, noon).done, 6000);
 // Ratio is clamped, so an overshot goal doesn't overflow its bar.
 assert.strictEqual(goalProgress(log, { seconds: 60, period: "total" }, mineOnly, noon).ratio, 1);
 assert.strictEqual(goalProgress([], goal, () => true, noon).done, 0);
+
+// Marked read early: done however little time it took, and no longer paced.
+const marked = { seconds: 72000, period: "total", completedAt: today, deadline: today + 3 * DAY };
+assert.deepStrictEqual(goalProgress(log, marked, mineOnly, noon),
+	{ done: 6000, target: 72000, complete: true, ratio: 1 });
+assert.strictEqual(goalPace(marked, 6000, noon), null, "a finished goal needs no pace");
+assert.ok(canComplete({ period: "total" }));
+assert.ok(!canComplete({ period: "week" }), "a recurring goal has nothing to finish");
 
 // Pace: only for a dated total that is still short.
 const dated = { seconds: 7200, period: "total", deadline: today + 3 * DAY };

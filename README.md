@@ -65,6 +65,12 @@ the **Goals** tab in the history window. A goal is a target plus a period:
   you'd need (`38m a day to finish by 30 Sep`);
 - `3h` **per week**, or per day, or per month — progress resets each period.
 
+Finished the book faster than you planned? **✓** marks a one-off goal read —
+it counts as done however much time it actually took, and the goal keeps the
+real figure (`Marked read 21/08 · 8h 40m of 15h`) rather than pretending you
+spent the hours. **↺** reopens it. Recurring goals have no ✓: a weekly target
+starts again on Monday, so there is nothing to finish early.
+
 Collection goals count sub-collections, and an item counts towards both its own
 goal and any collection goal covering it. `All reading` goals cover the whole
 library. Whatever you're reading shows its two most relevant goals as bars in

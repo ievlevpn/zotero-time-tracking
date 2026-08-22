@@ -114,8 +114,9 @@ const GOAL_SCHEMA = [
 		seconds    INTEGER NOT NULL CHECK (seconds > 0),
 		period     TEXT NOT NULL CHECK (period IN ('total', 'day', 'week', 'month')),
 		deadline   INTEGER,                   -- unix ms; only meaningful with 'total'
-		notifiedAt INTEGER,                   -- when this goal was last announced
-		updatedAt  INTEGER NOT NULL
+		notifiedAt  INTEGER,                  -- when this goal was last announced
+		completedAt INTEGER,                  -- marked read early; done regardless of time
+		updatedAt   INTEGER NOT NULL
 	)`,
 	// One goal per target per period. IFNULL, because SQLite counts NULLs as
 	// distinct and 'all' goals would otherwise multiply freely.
@@ -123,12 +124,11 @@ const GOAL_SCHEMA = [
 		ON goals (libraryID, scope, IFNULL(key, ''), period)`,
 ];
 
-const GOAL_COLS = ["id", "libraryID", "scope", "key", "seconds", "period", "deadline", "notifiedAt", "updatedAt"];
+const GOAL_COLS = ["id", "libraryID", "scope", "key", "seconds", "period", "deadline", "notifiedAt", "completedAt", "updatedAt"];
 
-// Bump when a change needs more than a new table: CREATE TABLE IF NOT EXISTS
-// covers new tables on old files, but nothing else. Numbered steps go in
-// migrate(); there are none yet, because v1 only adds tables.
-const DB_VERSION = 1;
+// Bump when the shape changes; the stamp is a marker for migrations that can't
+// be made idempotent. Adding a column doesn't need one — see migrate().
+const DB_VERSION = 2;
 
 // <Zotero data dir>/time-tracker.sqlite — ours alone, next to zotero.sqlite.
 //
@@ -154,6 +154,7 @@ async function openDB() {
 		// SQLITE_BUSY, and that must not take the rest of the open down with it.
 		await conn.queryAsync("PRAGMA journal_mode = DELETE").catch(oops);
 		for (const sql of SCHEMA.concat(GOAL_SCHEMA)) await conn.queryAsync(sql);
+		await migrate(conn);
 		const version = Number(await conn.valueQueryAsync("PRAGMA user_version")) || 0;
 		if (version !== DB_VERSION) await conn.queryAsync(`PRAGMA user_version = ${DB_VERSION}`);
 		for (const row of await conn.queryAsync("SELECT * FROM sessions ORDER BY started")) {
@@ -171,6 +172,16 @@ async function openDB() {
 	db = conn;                       // only now can anything else use it
 	refreshViews();
 	paint();
+}
+
+// Columns added to an existing table. Driven by what the file actually has
+// rather than by the version stamp: CREATE TABLE IF NOT EXISTS gives a fresh
+// database every column already, so a version-driven ALTER would fail on it.
+async function migrate(conn) {
+	const columns = (await conn.queryAsync("PRAGMA table_info(goals)")).map((r) => r.name);
+	if (!columns.includes("completedAt")) {
+		await conn.queryAsync("ALTER TABLE goals ADD COLUMN completedAt INTEGER");
+	}
 }
 
 async function closeDB() {
@@ -489,6 +500,9 @@ const CSS = `
 .rt-panel .rt-add button { flex:0 0 auto; }
 .rt-panel .rt-goal { margin-top:8px; }
 .rt-panel .rt-goalbtn { width:100%; margin-top:8px; }
+.rt-panel .rt-mark { flex:0 0 auto; font:11px sans-serif; padding:0 5px; margin-left:4px;
+	border:1px solid transparent; border-radius:4px; background:transparent; color:CanvasText; cursor:pointer; }
+.rt-panel .rt-goal:hover .rt-mark { border-color:GrayText; }
 .rt-panel .rt-goaledit { margin-top:8px; border-top:1px solid GrayText; padding-top:8px; }
 .rt-panel .rt-seg { display:flex; gap:4px; margin-top:6px; }
 .rt-panel .rt-seg button.on { background:Highlight; color:HighlightText; }
@@ -760,6 +774,16 @@ function fillPanel(doc, box, item, reader) {
 		const bar = el(doc, "div", "bar");
 		const fill = el(doc, "i");
 		bar.append(fill);
+		let mark = null;
+		if (canComplete(g)) {
+			mark = el(doc, "button", "rt-mark");
+			mark.addEventListener("click", (e) => {
+				e.stopPropagation();          // don't open the editor as well
+				toggleComplete(g);
+				rebuild();
+			});
+			head.append(mark);
+		}
 		wrap.append(head, bar);
 		if (g.scope === "item") {
 			wrap.title = "Change this goal";
@@ -767,7 +791,7 @@ function fillPanel(doc, box, item, reader) {
 			wrap.addEventListener("click", () => editing(true));
 		}
 		box.insertBefore(wrap, add);
-		return { g, label, value, fill };
+		return { g, label, value, fill, mark };
 	});
 
 	// Setting a goal without leaving the book. The item's own goal is the one
@@ -848,6 +872,10 @@ function fillPanel(doc, box, item, reader) {
 			b.value.textContent = `${fmtTotal(done) || "0m"} / ${fmtTotal(b.g.seconds)}`;
 			b.fill.style.width = Math.round(ratio * 100) + "%";
 			b.fill.className = ratio >= 1 ? "done" : "";
+			if (b.mark) {
+				b.mark.textContent = b.g.completedAt ? "↺" : "✓";
+				b.mark.title = b.g.completedAt ? "Reopen this goal" : "Mark as read — finished early";
+			}
 		}
 		pomLabel.textContent = `🍅 Focus ${focusMin}m`;
 		stats.forEach(([, get], i) => { values[i].textContent = fmtTotal(safe(get, 0)) || "0m"; });
@@ -971,18 +999,32 @@ function goalProgress(rows, goal, matches, now) {
 	for (const r of rows) {
 		if (r.started >= since && matches(r)) done += r.seconds;
 	}
-	return { done, target: goal.seconds, ratio: Math.max(0, Math.min(1, done / goal.seconds)) };
+	// Marked read counts as finished however much time it took — reading faster
+	// than you estimated is a good outcome, not an unmet goal.
+	const complete = !!goal.completedAt;
+	return {
+		done, target: goal.seconds, complete,
+		ratio: complete ? 1 : Math.max(0, Math.min(1, done / goal.seconds)),
+	};
 }
 
 // What you'd have to average from now on to land a deadline. null when there is
 // nothing to pace: no deadline, already done, or the day has arrived.
 function goalPace(goal, done, now) {
-	if (goal.period !== "total" || !goal.deadline || done >= goal.seconds) return null;
+	if (goal.completedAt || goal.period !== "total" || !goal.deadline || done >= goal.seconds) return null;
 	const days = Math.ceil((startOfDay(goal.deadline) - startOfDay(now)) / DAY) + 1;
 	return days > 0 ? { perDay: (goal.seconds - done) / days, days } : null;
 }
 
-const periodLabel = { total: "in total", day: "per day", week: "per week", month: "per month" };
+const periodLabel = { total: "once", day: "per day", week: "per week", month: "per month" };
+
+// A recurring goal resets; there is nothing to finish early.
+const canComplete = (g) => g.period === "total";
+
+function toggleComplete(g) {
+	g.completedAt = g.completedAt ? null : Date.now();
+	saveGoal(g);
+}
 
 // The sessions a goal counts. Resolved when asked, never stored: collection
 // membership changes, and an orphaned goal must report itself rather than
@@ -1026,6 +1068,7 @@ function goalsFor(item) {
 function checkGoals() {
 	const now = Date.now();
 	for (const g of goals) {
+		if (g.completedAt) continue;   // already settled, by hand
 		const matches = goalMatcher(g);
 		if (!matches) continue;
 		const { done, ratio } = goalProgress(log, g, matches, now);
@@ -1297,6 +1340,13 @@ function sessionRow(doc, win, r) {
 	if (live) {
 		act.append(el(doc, "span", "n", "stop the timer to edit"));
 	} else {
+		if (canComplete(g)) {
+			const mark = el(doc, "button", null, g.completedAt ? "↺" : "✓");
+			mark.title = g.completedAt ? "Not finished after all — reopen this goal"
+				: "Mark as read — finished early";
+			mark.addEventListener("click", () => { toggleComplete(g); safe(() => buildHistory(win)); });
+			head.append(mark);
+		}
 		const edit = el(doc, "button", null, "✎");
 		edit.title = "Change this session's duration";
 		edit.addEventListener("click", (e) => { e.stopPropagation(); editSession(win, r); });
@@ -1428,7 +1478,7 @@ function buildGoals(doc, win) {
 	for (const g of rows) {
 		const matches = goalMatcher(g);
 		const name = goalTitle(g);
-		const { done, ratio } = matches ? goalProgress(log, g, matches, now) : { done: 0, ratio: 0 };
+		const { done, ratio, complete } = matches ? goalProgress(log, g, matches, now) : { done: 0, ratio: 0 };
 
 		const box = el(doc, "div", "goal");
 		const head = el(doc, "div", "goal-head");
@@ -1436,6 +1486,13 @@ function buildGoals(doc, win) {
 			el(doc, "span", "rt-muted", `${fmtTotal(g.seconds)} ${periodLabel[g.period]}`),
 			el(doc, "b", null, `${fmtTotal(done) || "0m"} / ${fmtTotal(g.seconds)}`));
 
+		if (canComplete(g)) {
+			const mark = el(doc, "button", null, g.completedAt ? "↺" : "✓");
+			mark.title = g.completedAt ? "Not finished after all — reopen this goal"
+				: "Mark as read — finished early";
+			mark.addEventListener("click", () => { toggleComplete(g); safe(() => buildHistory(win)); });
+			head.append(mark);
+		}
 		const edit = el(doc, "button", null, "✎");
 		edit.title = "Change this goal";
 		edit.addEventListener("click", () => { goalDraft = Object.assign({}, g, { title: name }); safe(() => buildHistory(win)); });
@@ -1448,12 +1505,13 @@ function buildGoals(doc, win) {
 		const bar = el(doc, "div", "bar");
 		const fill = el(doc, "i");
 		fill.style.width = Math.round(ratio * 100) + "%";
-		if (ratio >= 1) fill.className = "done";
+		if (ratio >= 1 || complete) fill.className = "done";
 		bar.append(fill);
 		box.append(bar);
 
 		const pace = matches && goalPace(g, done, now);
 		const foot = !matches ? "The item or collection this goal was set on is gone."
+			: g.completedAt ? `Marked read ${new Date(g.completedAt).toLocaleDateString()} · ${fmtTotal(done) || "0m"} of ${fmtTotal(g.seconds)}`
 			: pace ? `${fmtTotal(pace.perDay)} a day to finish by ${new Date(g.deadline).toLocaleDateString()}`
 			: ratio >= 1 ? "Done ✓" : `${fmtTotal(g.seconds - done)} to go`;
 		box.append(el(doc, "div", "rt-muted", foot));
@@ -1724,7 +1782,7 @@ function uninstall() {}
 
 // node-only: lets test.js import the pure helpers; no-op inside Zotero.
 if (typeof module !== "undefined") {
-	module.exports = { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, historyByDay, heatmapWeeks, level, rollUp, fuzzy, periodStart, goalProgress, goalPace };
+	module.exports = { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, historyByDay, heatmapWeeks, level, rollUp, fuzzy, periodStart, goalProgress, goalPace, canComplete };
 	// Enough of the machinery for test.js to drive a whole session. A smoke test
 	// is what catches an edit that quietly deletes a function everything calls.
 	module.exports.__internals = {
