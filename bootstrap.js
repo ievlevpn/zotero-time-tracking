@@ -299,6 +299,50 @@ function dropRow(row) {
 	db.queryAsync("DELETE FROM sessions WHERE id = ?", [row.id]).catch(oops);
 }
 
+// Time belongs to the parent item — that is what itemOf() resolves to. So when
+// a standalone PDF gains a parent (Zotero's "Create Parent Item"), the sessions
+// already logged against the attachment have to follow, or they sit apart from
+// everything logged afterwards, filed under the PDF's filename. Idempotent, and
+// anything Zotero can't resolve right now is left alone rather than guessed at.
+function reparentRows(resolve) {
+	let moved = 0;
+	for (const id of new Set(log.map((r) => r.libraryID + "/" + r.itemKey))) {
+		const cut = id.indexOf("/");
+		const libraryID = Number(id.slice(0, cut));
+		const key = id.slice(cut + 1);
+		const parent = resolve(libraryID, key);
+		if (!parent) continue;
+
+		for (const r of log) {
+			if (r.libraryID !== libraryID || r.itemKey !== key) continue;
+			r.libraryID = parent.libraryID;
+			r.itemKey = parent.key;
+			r.title = parent.title;
+			moved++;
+		}
+		// A goal set on the standalone PDF moves too — unless the parent already
+		// has one for that period, in which case the parent's wins.
+		for (const g of goals.slice()) {
+			if (g.scope !== "item" || g.libraryID !== libraryID || g.key !== key) continue;
+			const clash = goals.find((x) => x !== g && x.scope === "item" && x.period === g.period
+				&& x.libraryID === parent.libraryID && x.key === parent.key);
+			if (clash) dropGoal(g);
+			else { g.libraryID = parent.libraryID; g.key = parent.key; saveGoal(g); }
+		}
+		if (db) {
+			db.queryAsync("UPDATE sessions SET libraryID = ?, itemKey = ?, title = ? WHERE libraryID = ? AND itemKey = ?",
+				[parent.libraryID, parent.key, parent.title, libraryID, key]).catch(oops);
+		}
+	}
+	return moved;
+}
+
+const parentOf = (libraryID, key) => safe(() => {
+	const item = Zotero.Items.getByLibraryAndKey(libraryID, key);
+	const parent = item && item.isAttachment() && item.parentItem;
+	return parent ? { libraryID: parent.libraryID, key: parent.key, title: parent.getDisplayTitle() } : null;
+}, null);
+
 // The reader is attached to an attachment; time belongs on its parent, if any.
 // Zotero.Items.get() throws UnloadedDataException when an id is known but the
 // object isn't in the cache yet — routine while tabs are still settling.
@@ -1346,6 +1390,7 @@ function openHistory(filter) {
 	const main = Zotero.getMainWindow();
 	if (!main) return;
 	historyFilter = filter || null;
+	safe(() => reparentRows(parentOf));   // items unloaded at startup get their chance here
 	if (historyWin && !historyWin.closed) {
 		historyWin.focus();
 		return safe(() => buildHistory(historyWin));
@@ -1899,7 +1944,8 @@ if (typeof module !== "undefined") {
 	// Enough of the machinery for test.js to drive a whole session. A smoke test
 	// is what catches an edit that quietly deletes a function everything calls.
 	module.exports.__internals = {
-		start, stop, tick, paint, setPaused, checkOrphaned, buildHistory, openPanel, closePanel, log, goals, bars,
+		start, stop, tick, paint, setPaused, checkOrphaned, buildHistory, openPanel, closePanel,
+		reparentRows, log, goals, bars,
 		setActive: (v) => { active = v; }, setDB: (v) => { db = v; }, getTimer: () => timer,
 		setRegistered: (col, row) => { columnKey = col; infoRowID = row; },
 	};

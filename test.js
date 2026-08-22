@@ -310,4 +310,32 @@ I.closePanel();                                       // clicked outside; no blu
 assert.strictEqual(I.log[0].note, "ch. 3-4, the argument about coinage",
 	"closing the popup commits what was typed");
 
+// --- a PDF that gains a parent hands over its time -------------------------
+I.log.length = 0;
+I.goals.length = 0;
+I.log.push(
+	{ id: "p1", libraryID: 1, itemKey: "PDFKEY", title: "de Libera - Penser au Moyen Age.pdf", mode: "stopwatch", started: 1, seconds: 2100 },
+	{ id: "p2", libraryID: 1, itemKey: "PDFKEY", title: "de Libera - Penser au Moyen Age.pdf", mode: "stopwatch", started: 2, seconds: 600 },
+	{ id: "p3", libraryID: 1, itemKey: "OTHER", title: "Something Else", mode: "stopwatch", started: 3, seconds: 300 });
+I.goals.push({ id: "gp", libraryID: 1, scope: "item", key: "PDFKEY", seconds: 3600, period: "total", updatedAt: 1 });
+
+const resolve = (libraryID, key) => key === "PDFKEY"
+	? { libraryID: 1, key: "PARENT", title: "Penser au Moyen Âge" } : null;
+
+assert.strictEqual(I.reparentRows(resolve), 2, "both sessions moved");
+assert.deepStrictEqual(I.log.map((r) => r.itemKey), ["PARENT", "PARENT", "OTHER"]);
+assert.ok(I.log.every((r) => r.itemKey !== "PARENT" || r.title === "Penser au Moyen Âge"), "and took the parent's title");
+assert.strictEqual(I.log[2].title, "Something Else", "unrelated sessions untouched");
+assert.strictEqual(I.goals[0].key, "PARENT", "a goal on the PDF follows it");
+assert.strictEqual(sumSeconds(I.log, { id: "1/PARENT" }), 2700, "the time is whole again");
+
+assert.strictEqual(I.reparentRows(resolve), 0, "idempotent: nothing left to move");
+
+// If the parent already has a goal for that period, the parent's wins.
+I.log.push({ id: "p4", libraryID: 1, itemKey: "PDF2", title: "x.pdf", mode: "stopwatch", started: 4, seconds: 60 });
+I.goals.push({ id: "g2", libraryID: 1, scope: "item", key: "PDF2", seconds: 999, period: "total", updatedAt: 1 });
+I.reparentRows((lib, key) => key === "PDF2" ? { libraryID: 1, key: "PARENT", title: "Penser au Moyen Âge" } : null);
+assert.strictEqual(I.goals.length, 1, "the duplicate goal is dropped, not merged into a conflict");
+assert.strictEqual(I.goals[0].seconds, 3600, "and the one already on the parent survives");
+
 console.log("ok");
