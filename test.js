@@ -285,30 +285,46 @@ assert.strictEqual(notes.length, 2, "every session has a note line");
 assert.ok(notes.some((n) => n.textContent.includes("coinage")), "the written note is shown");
 assert.ok(notes.some((n) => n.className.includes("empty")), "an unwritten one is an invitation, not a blank");
 
-// --- a note typed in the popup survives the popup closing ------------------
+// --- the note field belongs to the running session -------------------------
 // Clicking outside closes the panel on pointerdown, which removes the focused
-// input — and removing a focused element fires no blur. Enter was the only way
-// the text ever reached the database.
-const panelDoc = fakeDoc();
+// input — and removing a focused element fires no blur. Enter was once the only
+// way the text reached the database.
 const button = node("button");
 button.getBoundingClientRect = () => ({ bottom: 20, left: 10 });
 const reader = { itemID: 10 };
+const noteFieldIn = (doc) => {
+	const found = [];
+	const walk = (n) => { if (n.tag === "input") found.push(n); (n.children || []).forEach(walk); };
+	doc.body.children.forEach(walk);
+	return found.find((i) => (i.placeholder || "").includes("Note for this session"));
+};
+
 I.log.length = 0;
-I.log.push({ id: "n1", libraryID: 1, itemKey: "BOOK", title: "A Book", mode: "stopwatch",
-	started: Date.now() - 600e3, seconds: 900, note: null });
+I.start("stopwatch", book);
+const timed = I.log[0];
 
+let panelDoc = fakeDoc();
 I.openPanel(reader, panelDoc, button);
-const inputs = [];
-const findInputs = (n) => { if (n.tag === "input") inputs.push(n); (n.children || []).forEach(findInputs); };
-panelDoc.body.children.forEach(findInputs);
-const noteField = inputs.find((i) => (i.placeholder || "").includes("Note for this session"));
-assert.ok(noteField, "the popup offers a note field");
-
-noteField.value = "ch. 3-4, the argument about coinage";
-noteField.listeners.input.forEach((fn) => fn());     // typing marks it dirty
-I.closePanel();                                       // clicked outside; no blur fires
-assert.strictEqual(I.log[0].note, "ch. 3-4, the argument about coinage",
+let field = noteFieldIn(panelDoc);
+assert.ok(field, "a running timer offers a note field");
+field.value = "ch. 3-4, the argument about coinage";
+field.listeners.input.forEach((fn) => fn());
+I.closePanel();                                   // clicked outside; no blur fires
+assert.strictEqual(timed.note, "ch. 3-4, the argument about coinage",
 	"closing the popup commits what was typed");
+
+// Stopping saves what is in the field and empties it: the session it belonged
+// to is over, and leftover text would read as unsaved.
+panelDoc = fakeDoc();
+I.openPanel(reader, panelDoc, button);
+field = noteFieldIn(panelDoc);
+field.value = "and the bit about coinage in ch. 5";
+field.listeners.input.forEach((fn) => fn());
+I.stop();
+assert.strictEqual(timed.note, "and the bit about coinage in ch. 5", "stopping commits the text");
+assert.strictEqual(field.value, "", "and empties the field");
+assert.ok(field.parentElement.hidden, "which has no session left to attach to");
+I.closePanel();
 
 // --- a PDF that gains a parent hands over its time -------------------------
 I.log.length = 0;

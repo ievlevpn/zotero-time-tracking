@@ -412,6 +412,7 @@ function setPaused(paused) {
 
 function stop(discard) {
 	if (!timer) return;
+	safe(() => panel && panel.flush());   // typed text belongs to the session it was typed during
 	absorb();
 	// A started-and-immediately-stopped timer isn't history worth keeping.
 	if (discard || timer.row.seconds < 1) dropRow(timer.row);
@@ -872,18 +873,10 @@ function fillPanel(doc, box, item, reader) {
 		return { g, label, value, fill, mark };
 	});
 
-	// A note goes on the session it belongs to: the running one, or the last one
-	// finished on this item today — so it can still be written after stopping.
-	const notable = () => {
-		if (timer && timer.id === idOf(item) && timer.row) return timer.row;
-		const since = startOfDay(Date.now());
-		for (let i = log.length - 1; i >= 0; i--) {
-			const r = log[i];
-			if (r.started < since) break;
-			if (r.libraryID === item.libraryID && r.itemKey === item.key) return r;
-		}
-		return null;
-	};
+	// The note belongs to the session being timed and to nothing else. Stopping
+	// commits it and empties the field, so what is on screen is always the note
+	// for what is running now — never a leftover that looks unsaved.
+	const notable = () => (timer && timer.id === idOf(item) && timer.row) || null;
 
 	const noteBox = el(doc, "div", "rt-note");
 	const noteInput = doc.createElement("input");
@@ -997,8 +990,11 @@ function fillPanel(doc, box, item, reader) {
 		}
 		const jotting = notable();
 		noteBox.hidden = !jotting;
-		// Never overwrite what is being typed.
-		if (jotting && !noteDirty) noteInput.value = jotting.note || "";
+		if (!jotting) {
+			noteInput.value = "";   // the session it belonged to is over and saved
+			noteDirty = false;
+		}
+		else if (!noteDirty) noteInput.value = jotting.note || "";   // never overwrite typing
 		pomLabel.textContent = `🍅 Focus ${focusMin}m`;
 		stats.forEach(([, get], i) => { values[i].textContent = fmtTotal(safe(get, 0)) || "0m"; });
 		const mine = isMine(item);
