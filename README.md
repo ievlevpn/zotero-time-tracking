@@ -59,7 +59,7 @@ goal…**, or click an existing goal's bar to change it. For collections and
 library-wide goals, right-click in the library → **Set reading goal…**, or open
 the **Goals** tab in the history window. A goal is a target plus a period:
 
-- `20h` **in total**, optionally by a date — the window then shows the pace
+- `20h` **once** (the default), optionally by a date — the window then shows the pace
   you'd need (`38m a day to finish by 30 Sep`);
 - `3h` **per week**, or per day, or per month — progress resets each period.
 

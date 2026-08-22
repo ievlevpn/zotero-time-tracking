@@ -490,8 +490,8 @@ const CSS = `
 .rt-panel .rt-goal { margin-top:8px; }
 .rt-panel .rt-goalbtn { width:100%; margin-top:8px; }
 .rt-panel .rt-goaledit { margin-top:8px; border-top:1px solid GrayText; padding-top:8px; }
-.rt-panel .rt-goaledit select { flex:0 0 auto; padding:4px; font:12px sans-serif;
-	background:Canvas; color:CanvasText; border:1px solid GrayText; border-radius:4px; }
+.rt-panel .rt-seg { display:flex; gap:4px; margin-top:6px; }
+.rt-panel .rt-seg button.on { background:Highlight; color:HighlightText; }
 .rt-panel .bar { height:6px; border-radius:3px; background:color-mix(in srgb, CanvasText 15%, Canvas);
 	overflow:hidden; margin-top:3px; }
 .rt-panel .bar i { display:block; height:100%; background:#40c463; }
@@ -781,21 +781,15 @@ function fillPanel(doc, box, item, reader) {
 	const gInput = doc.createElement("input");
 	gInput.type = "text";
 	gInput.placeholder = "3h, 45m, 20h";
-	const gPeriod = doc.createElement("select");
-	for (const [value, label] of [["day", "per day"], ["week", "per week"], ["month", "per month"], ["total", "in total"]]) {
-		const opt = doc.createElement("option");
-		opt.value = value;
-		opt.textContent = label;
-		gPeriod.append(opt);
-	}
+	const gPeriod = periodPicker(doc, "total");
 	const gFields = el(doc, "div", "rt-add");
-	gFields.append(gInput, gPeriod);
+	gFields.append(gInput);
 	const gButtons = el(doc, "div", "rt-actions");
 	const gSave = el(doc, "button", null, "Save");
 	const gDrop = el(doc, "button", null, "Remove");
 	const gCancel = el(doc, "button", null, "Cancel");
 	gButtons.append(gSave, gDrop, gCancel);
-	editor.append(gFields, gButtons);
+	editor.append(gFields, gPeriod.el, gButtons);
 	editor.hidden = true;
 	box.insertBefore(goalBtn, add);
 	box.insertBefore(editor, add);
@@ -806,7 +800,7 @@ function fillPanel(doc, box, item, reader) {
 		if (!on) return;
 		const g = ownGoal();
 		gInput.value = g ? fmtTotal(g.seconds) : "";
-		gPeriod.value = g ? g.period : "week";
+		gPeriod.value = g ? g.period : "total";
 		gDrop.hidden = !g;
 		gInput.focus();
 	};
@@ -1149,6 +1143,10 @@ h1 { font-size:15px; margin:0 0 12px; }
 .bar i.done { background:var(--l4); }
 .editor { border:1px solid GrayText; border-radius:6px; padding:10px; margin:14px 0; }
 .editor-line { display:flex; gap:6px; margin-top:8px; align-items:center; }
+.rt-seg { display:flex; gap:4px; }
+.rt-seg button { font:12px sans-serif; padding:4px 10px; border:1px solid GrayText; border-radius:5px;
+	background:transparent; color:CanvasText; cursor:pointer; }
+.rt-seg button.on { background:Highlight; color:HighlightText; }
 .editor input, .editor select { padding:4px 6px; font:12px sans-serif;
 	background:Canvas; color:CanvasText; border:1px solid GrayText; border-radius:4px; }
 .editor input[type=text] { flex:1; min-width:0; }
@@ -1333,6 +1331,29 @@ function deleteSession(win, r) {
 	safe(() => buildHistory(win));
 }
 
+// A row of buttons rather than a <select>: native dropdowns don't reliably open
+// inside the reader's document, and this matches every other control we draw.
+// "once" is the default — a goal is a target to reach, not a treadmill, unless
+// you say otherwise.
+function periodPicker(doc, initial, onChange) {
+	const box = el(doc, "div", "rt-seg");
+	const buttons = [];
+	let value = initial || "total";
+	const paint = () => { for (const [v, b] of buttons) b.className = v === value ? "on" : ""; };
+	for (const [v, label] of [["total", "once"], ["day", "day"], ["week", "week"], ["month", "month"]]) {
+		const b = el(doc, "button", null, label);
+		b.addEventListener("click", () => { value = v; paint(); if (onChange) onChange(v); });
+		buttons.push([v, b]);
+		box.append(b);
+	}
+	paint();
+	return {
+		el: box,
+		get value() { return value; },
+		set value(v) { value = v; paint(); },
+	};
+}
+
 // Start (or resume) editing the goal for one target.
 function startGoal(target) {
 	const same = (g) => g.libraryID === target.libraryID && g.scope === target.scope
@@ -1340,7 +1361,7 @@ function startGoal(target) {
 	const existing = goals.filter(same);
 	goalDraft = existing.length
 		? Object.assign({}, existing[0], { title: target.title })
-		: Object.assign({ seconds: 3600, period: "week", deadline: null }, target);
+		: Object.assign({ seconds: 3600, period: "total", deadline: null }, target);
 	historyView = "goals";
 	openHistory(null);
 }
@@ -1356,24 +1377,14 @@ function goalEditor(doc, win) {
 	target.value = fmtTotal(goalDraft.seconds) || "1h";
 	target.placeholder = "3h, 45m, 20h";
 
-	const period = doc.createElement("select");
-	for (const [value, label] of [["day", "per day"], ["week", "per week"], ["month", "per month"], ["total", "in total"]]) {
-		const opt = doc.createElement("option");
-		opt.value = value;
-		opt.textContent = label;
-		if (goalDraft.period === value) opt.selected = true;
-		period.append(opt);
-	}
-
 	const by = doc.createElement("input");
 	by.type = "date";
 	by.title = "Deadline (optional)";
 	if (goalDraft.deadline) by.value = new Date(goalDraft.deadline).toISOString().slice(0, 10);
-	const showBy = () => { by.hidden = period.value !== "total"; };
-	period.addEventListener("change", showBy);
-	showBy();
+	const period = periodPicker(doc, goalDraft.period, (v) => { by.hidden = v !== "total"; });
+	by.hidden = period.value !== "total";
 
-	line.append(target, period, by);
+	line.append(target, period.el, by);
 	box.append(line);
 
 	const buttons = el(doc, "div", "editor-line");
