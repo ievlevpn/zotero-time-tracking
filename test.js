@@ -338,4 +338,27 @@ I.reparentRows((lib, key) => key === "PDF2" ? { libraryID: 1, key: "PARENT", tit
 assert.strictEqual(I.goals.length, 1, "the duplicate goal is dropped, not merged into a conflict");
 assert.strictEqual(I.goals[0].seconds, 3600, "and the one already on the parent survives");
 
+// --- several attachments, one item -----------------------------------------
+// A book's PDF and its appendix are the same reading. itemOf() resolves every
+// attachment to its parent before anything is recorded, so both readers key to
+// the same item — and a timer survives closing one of the two tabs.
+const pdf = { id: 30, libraryID: 1, key: "PDF_A", parentID: 1, isAttachment: () => true };
+const appendix = { id: 31, libraryID: 1, key: "PDF_B", parentID: 1, isAttachment: () => true };
+for (const a of [pdf, appendix]) {
+	Object.defineProperty(a, "parentItem", { get() { return global.Zotero.Items.get(this.parentID); } });
+}
+const shelf = { 30: pdf, 31: appendix, 1: book };
+global.Zotero.Items.get = (id) => shelf[id] || false;
+
+assert.strictEqual(I.idFor({ itemID: 30 }), I.idFor({ itemID: 31 }),
+	"both attachments are the same item's time");
+assert.strictEqual(I.idFor({ itemID: 30 }), "1/BOOK");
+
+openReaders = [{ itemID: 30 }, { itemID: 31 }];
+assert.strictEqual(I.readerOpenFor("1/BOOK"), true);
+openReaders = [{ itemID: 31 }];                       // one of the two tabs closed
+assert.strictEqual(I.readerOpenFor("1/BOOK"), true, "the other attachment still counts as open");
+openReaders = [];
+assert.strictEqual(I.readerOpenFor("1/BOOK"), false, "the last one closed ends it");
+
 console.log("ok");

@@ -1945,7 +1945,7 @@ if (typeof module !== "undefined") {
 	// is what catches an edit that quietly deletes a function everything calls.
 	module.exports.__internals = {
 		start, stop, tick, paint, setPaused, checkOrphaned, buildHistory, openPanel, closePanel,
-		reparentRows, log, goals, bars,
+		reparentRows, idFor, readerOpenFor, log, goals, bars,
 		setActive: (v) => { active = v; }, setDB: (v) => { db = v; }, getTimer: () => timer,
 		setRegistered: (col, row) => { columnKey = col; infoRowID = row; },
 	};
