@@ -4,6 +4,8 @@ Built for **Zotero 10**. It uses plugin APIs that arrived across the 7.x line �
 reader toolbar events, custom item-tree columns, item-pane info rows, and the
 menu API — and is only tested against 10.
 
+![The history window: totals, a year of reading as a heatmap, and every day's sessions](docs/history.png)
+
 Adds a 🕐 button to the reader toolbar. Click it for a small popup with three
 ways to log time on the item you're reading:
 
@@ -73,6 +75,22 @@ Goals live in a `goals` table beside the sessions, keyed by item/collection key
 rather than a numeric id, so they survive anything that renumbers rows. The
 target of a deleted item or collection is shown as *(deleted)* rather than being
 cleaned up behind your back.
+
+## What it looks like
+
+A clock button in the reader toolbar, showing the live time, with everything
+else a click away — totals for the item, goal progress, the timer controls, and
+manual entry:
+
+<img src="docs/popup.png" width="360" alt="The reader toolbar button and its popup">
+
+Goals, with the pace needed to hit a deadline:
+
+![The Goals tab](docs/goals.png)
+
+Where the time went, by collection, with a fuzzy filter:
+
+![The Collections tab](docs/collections.png)
 
 ## Storage
 
