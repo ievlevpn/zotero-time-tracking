@@ -488,6 +488,10 @@ const CSS = `
 .rt-panel .rt-add input { flex:1; min-width:0; box-sizing:border-box; padding:4px 6px; font:12px sans-serif; }
 .rt-panel .rt-add button { flex:0 0 auto; }
 .rt-panel .rt-goal { margin-top:8px; }
+.rt-panel .rt-goalbtn { width:100%; margin-top:8px; }
+.rt-panel .rt-goaledit { margin-top:8px; border-top:1px solid GrayText; padding-top:8px; }
+.rt-panel .rt-goaledit select { flex:0 0 auto; padding:4px; font:12px sans-serif;
+	background:Canvas; color:CanvasText; border:1px solid GrayText; border-radius:4px; }
 .rt-panel .bar { height:6px; border-radius:3px; background:color-mix(in srgb, CanvasText 15%, Canvas);
 	overflow:hidden; margin-top:3px; }
 .rt-panel .bar i { display:block; height:100%; background:#40c463; }
@@ -668,7 +672,7 @@ function tryFill(doc, box, reader) {
 	}
 	box.replaceChildren();
 	panel.refresh = () => {};
-	safe(() => fillPanel(doc, box, item));   // sets panel.refresh when it succeeds
+	safe(() => fillPanel(doc, box, item, reader));   // sets panel.refresh when it succeeds
 	safe(() => panel.refresh());
 }
 
@@ -693,7 +697,7 @@ function watchOutside(reader, doc, box, btn) {
 	};
 }
 
-function fillPanel(doc, box, item) {
+function fillPanel(doc, box, item, reader) {
 	// Stats: this item, plus today and the last 7 days across the whole library.
 	const stats = [["This item", () => totalFor(item)],
 		["Today", () => sumSeconds(log, { since: startOfDay(Date.now()) })],
@@ -757,9 +761,77 @@ function fillPanel(doc, box, item) {
 		const fill = el(doc, "i");
 		bar.append(fill);
 		wrap.append(head, bar);
+		if (g.scope === "item") {
+			wrap.title = "Change this goal";
+			wrap.style.cursor = "pointer";
+			wrap.addEventListener("click", () => editing(true));
+		}
 		box.insertBefore(wrap, add);
 		return { g, label, value, fill };
 	});
+
+	// Setting a goal without leaving the book. The item's own goal is the one
+	// worth having here; collection and library-wide goals live in the Goals tab.
+	const rebuild = () => safe(() => tryFill(doc, box, reader));
+	const ownGoal = (period) => goals.find((g) => g.scope === "item" && g.libraryID === item.libraryID
+		&& g.key === item.key && (!period || g.period === period));
+
+	const goalBtn = el(doc, "button", "rt-goalbtn", ownGoal() ? "🎯 Change goal…" : "🎯 Set a goal…");
+	const editor = el(doc, "div", "rt-goaledit");
+	const gInput = doc.createElement("input");
+	gInput.type = "text";
+	gInput.placeholder = "3h, 45m, 20h";
+	const gPeriod = doc.createElement("select");
+	for (const [value, label] of [["day", "per day"], ["week", "per week"], ["month", "per month"], ["total", "in total"]]) {
+		const opt = doc.createElement("option");
+		opt.value = value;
+		opt.textContent = label;
+		gPeriod.append(opt);
+	}
+	const gFields = el(doc, "div", "rt-add");
+	gFields.append(gInput, gPeriod);
+	const gButtons = el(doc, "div", "rt-actions");
+	const gSave = el(doc, "button", null, "Save");
+	const gDrop = el(doc, "button", null, "Remove");
+	const gCancel = el(doc, "button", null, "Cancel");
+	gButtons.append(gSave, gDrop, gCancel);
+	editor.append(gFields, gButtons);
+	editor.hidden = true;
+	box.insertBefore(goalBtn, add);
+	box.insertBefore(editor, add);
+
+	const editing = (on) => {
+		editor.hidden = !on;
+		goalBtn.hidden = on;
+		if (!on) return;
+		const g = ownGoal();
+		gInput.value = g ? fmtTotal(g.seconds) : "";
+		gPeriod.value = g ? g.period : "week";
+		gDrop.hidden = !g;
+		gInput.focus();
+	};
+	goalBtn.addEventListener("click", () => editing(true));
+	gCancel.addEventListener("click", () => editing(false));
+	gInput.addEventListener("keydown", (e) => {
+		if (e.key === "Escape") return;   // let it bubble so the panel closes
+		e.stopPropagation();              // keys must not trigger reader shortcuts
+		if (e.key === "Enter") gSave.click();
+	});
+	gSave.addEventListener("click", () => safe(() => {
+		const seconds = Math.round(parseDuration(gInput.value));
+		if (seconds <= 0) { gInput.focus(); return; }
+		// Same upsert rule as the Goals tab: one goal per target per period.
+		const g = ownGoal(gPeriod.value)
+			|| { id: Zotero.Utilities.randomString(12), libraryID: item.libraryID, scope: "item", key: item.key };
+		Object.assign(g, { seconds, period: gPeriod.value, deadline: null, notifiedAt: null });
+		saveGoal(g);
+		rebuild();          // the new bar has to come from a fresh goalsFor()
+	}));
+	gDrop.addEventListener("click", () => safe(() => {
+		const g = ownGoal();
+		if (g) dropGoal(g);
+		rebuild();
+	}));
 
 	// Focus length, adjustable before or during a run.
 	const pom = el(doc, "div", "rt-pom");
