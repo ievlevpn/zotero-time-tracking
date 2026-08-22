@@ -1,4 +1,4 @@
-// Self-check for the pure helpers: `node test.js`.
+// Self-check for the pure helpers and the machinery: `node test.js`.
 const assert = require("assert");
 const { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, historyByDay, heatmapWeeks, level, rollUp, fuzzy, periodStart, goalProgress, goalPace, canComplete } = require("./bootstrap.js");
 
@@ -376,5 +376,49 @@ openReaders = [{ itemID: 31 }];                       // one of the two tabs clo
 assert.strictEqual(I.readerOpenFor("1/BOOK"), true, "the other attachment still counts as open");
 openReaders = [];
 assert.strictEqual(I.readerOpenFor("1/BOOK"), false, "the last one closed ends it");
+
+// --- what happens when things go sideways ---------------------------------
+const book2 = { id: 2, libraryID: 1, key: "BOOK2", isRegularItem: () => true,
+	getDisplayTitle: () => "Another Book", getCollections: () => [] };
+shelf[2] = book2;
+const pdfC = { id: 40, libraryID: 1, key: "PDF_C", parentID: 2, isAttachment: () => true };
+Object.defineProperty(pdfC, "parentItem", { get() { return global.Zotero.Items.get(this.parentID); } });
+shelf[40] = pdfC;
+global.Zotero.Items.getIDFromLibraryAndKey = (lib, key) => (key === "BOOK2" ? 2 : 1);
+openReaders = [{ itemID: 30 }, { itemID: 40 }];   // both books open in tabs
+
+// (1) A second timer in another book asks first, and Cancel changes nothing.
+I.log.length = 0;
+I.start("stopwatch", book);
+I.getTimer().counted = 300;
+const first = I.getTimer().row;
+delete global.Services;                       // no prompt available → treated as "no"
+I.start("stopwatch", book2);
+assert.strictEqual(I.getTimer().row, first, "declining leaves the running timer alone");
+assert.strictEqual(I.log.length, 1, "and starts nothing");
+
+global.Services = { prompt: { confirm: () => true } };
+I.start("stopwatch", book2);
+assert.strictEqual(I.getTimer().id, "1/BOOK2", "accepting switches to the new book");
+assert.strictEqual(first.seconds, 300, "the first session is stopped and kept, not discarded");
+assert.strictEqual(I.log.length, 2, "one row each");
+
+// (3) A crash loses at most the flush interval: the row is rewritten every
+// FLUSH_EVERY ticks, so what survives is the last flush rather than nothing.
+I.getTimer().counted = 30;
+written.length = 0;
+for (let i = 0; i < 60; i++) I.tick();
+assert.ok(written.includes("UPDATE"), "a running session is written to disk about once a minute");
+
+// (4) A plugin upgrade stops and saves the running session — Zotero calls
+// shutdown() on the old instance before starting the new one.
+const running = I.getTimer().row;
+global.Zotero.Reader.unregisterEventListener = () => {};
+global.Zotero.ItemPaneManager.unregisterInfoRow = () => {};
+global.Zotero.ItemTreeManager.unregisterColumn = () => {};
+I.setDB({ queryAsync: () => Promise.resolve([]), closeDatabase: () => Promise.resolve() });
+I.shutdown().catch((e) => { throw e; });   // stops and saves before its first await
+assert.strictEqual(I.getTimer(), null, "no timer survives the upgrade");
+assert.ok(running.seconds > 0, "its time was saved on the way out");
 
 console.log("ok");
