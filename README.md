@@ -16,6 +16,10 @@ ways to log time on the item you're reading:
   toward reading time. The length can still be adjusted mid-run, and is
   remembered in `extensions.zotero.readingTime.focusMin`.
 - **Manual entry** — type `25`, `1h 30m`, `45s`, or `-10` to subtract.
+- **A note** — one line about what you read, saved against the session it
+  belongs to: the running one, or the last one you finished on that item today,
+  so it can still be written after you stop. Notes show under their session in
+  the history window and are editable there.
 
 While a timer runs the live time sits inside the clock button, so you can close
 the popup and keep reading. The popup also shows **This item / Today / Last 7
@@ -37,7 +41,8 @@ window with:
   time, click one to jump to that day below;
 - every day you read, newest first, with each item's time and session count.
   Click a line to unfold that day's individual sessions — each one can be
-  re-timed (✎, enter a new duration; 0 deletes it) or deleted (✕). Use ↗ to
+  re-timed (✎, enter a new duration; 0 deletes it) or deleted (✕), and each
+  carries a note — click under a session to write what you read. Use ↗ to
   select the item in the library.
 
 For one item only, use **↗ right-click an item → Reading Time History…** in the

@@ -94,13 +94,14 @@ const SCHEMA = [
 		title TEXT,
 		mode TEXT NOT NULL,        -- stopwatch | pomodoro | manual
 		started INTEGER NOT NULL,  -- unix ms
-		seconds INTEGER NOT NULL   -- countable time; manual entries may be negative
+		seconds INTEGER NOT NULL,  -- countable time; manual entries may be negative
+		note    TEXT               -- optional line about what you read
 	)`,
 	`CREATE INDEX IF NOT EXISTS sessions_item ON sessions (libraryID, itemKey)`,
 	`CREATE INDEX IF NOT EXISTS sessions_started ON sessions (started)`,
 ];
 
-const COLS = ["id", "libraryID", "itemKey", "title", "mode", "started", "seconds"];
+const COLS = ["id", "libraryID", "itemKey", "title", "mode", "started", "seconds", "note"];
 
 // One row per goal. Keyed by item/collection key rather than a numeric id so a
 // goal survives anything that renumbers rows, and matching `sessions` in using
@@ -128,7 +129,7 @@ const GOAL_COLS = ["id", "libraryID", "scope", "key", "seconds", "period", "dead
 
 // Bump when the shape changes; the stamp is a marker for migrations that can't
 // be made idempotent. Adding a column doesn't need one — see migrate().
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 // <Zotero data dir>/time-tracker.sqlite — ours alone, next to zotero.sqlite.
 //
@@ -177,10 +178,17 @@ async function openDB() {
 // Columns added to an existing table. Driven by what the file actually has
 // rather than by the version stamp: CREATE TABLE IF NOT EXISTS gives a fresh
 // database every column already, so a version-driven ALTER would fail on it.
+const ADDED_COLUMNS = [
+	["goals", "completedAt", "INTEGER"],
+	["sessions", "note", "TEXT"],
+];
+
 async function migrate(conn) {
-	const columns = (await conn.queryAsync("PRAGMA table_info(goals)")).map((r) => r.name);
-	if (!columns.includes("completedAt")) {
-		await conn.queryAsync("ALTER TABLE goals ADD COLUMN completedAt INTEGER");
+	for (const [table, column, type] of ADDED_COLUMNS) {
+		const columns = (await conn.queryAsync(`PRAGMA table_info(${table})`)).map((r) => r.name);
+		if (!columns.includes(column)) {
+			await conn.queryAsync(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+		}
 	}
 }
 
@@ -253,7 +261,7 @@ function addRow(item, mode, seconds, started = Date.now()) {
 	const row = {
 		id: Zotero.Utilities.randomString(12),
 		libraryID: item.libraryID, itemKey: item.key,
-		title: item.getDisplayTitle(), mode, started, seconds: Math.round(seconds),
+		title: item.getDisplayTitle(), mode, started, seconds: Math.round(seconds), note: null,
 	};
 	log.push(row);
 	db.queryAsync(`INSERT INTO sessions (${COLS.join(", ")}) VALUES (${COLS.map(() => "?").join(", ")})`,
@@ -263,8 +271,8 @@ function addRow(item, mode, seconds, started = Date.now()) {
 
 function saveRow(row) {
 	if (!db) return;   // nothing to write to; the in-memory log still has it
-	db.queryAsync("UPDATE sessions SET seconds = ?, title = ? WHERE id = ?",
-		[row.seconds, row.title, row.id]).catch(oops);
+	db.queryAsync("UPDATE sessions SET seconds = ?, title = ?, note = ? WHERE id = ?",
+		[row.seconds, row.title, row.note || null, row.id]).catch(oops);
 }
 
 // Upsert: the unique index makes "set a goal" replace the one already on that
@@ -511,6 +519,9 @@ const CSS = `
 .rt-panel .rt-add input { flex:1; min-width:0; box-sizing:border-box; padding:4px 6px; font:12px sans-serif; }
 .rt-panel .rt-add button { flex:0 0 auto; }
 .rt-panel .rt-goal { margin-top:8px; }
+.rt-panel .rt-note { margin-top:8px; }
+.rt-panel .rt-note input { width:100%; box-sizing:border-box; padding:4px 6px; font:12px sans-serif;
+	background:Canvas; color:CanvasText; border:1px solid GrayText; border-radius:4px; }
 .rt-panel .rt-goalbtn { width:100%; margin-top:8px; }
 .rt-panel .rt-goal .rt-row .rt-muted { flex:1; min-width:0; overflow:hidden;
 	text-overflow:ellipsis; white-space:nowrap; }
@@ -814,6 +825,40 @@ function fillPanel(doc, box, item, reader) {
 		return { g, label, value, fill, mark };
 	});
 
+	// A note goes on the session it belongs to: the running one, or the last one
+	// finished on this item today — so it can still be written after stopping.
+	const notable = () => {
+		if (timer && timer.id === idOf(item) && timer.row) return timer.row;
+		const since = startOfDay(Date.now());
+		for (let i = log.length - 1; i >= 0; i--) {
+			const r = log[i];
+			if (r.started < since) break;
+			if (r.libraryID === item.libraryID && r.itemKey === item.key) return r;
+		}
+		return null;
+	};
+
+	const noteBox = el(doc, "div", "rt-note");
+	const noteInput = doc.createElement("input");
+	noteInput.type = "text";
+	noteInput.placeholder = "📝 Note for this session…";
+	const saveNote = () => {
+		const r = notable();
+		if (!r) return;
+		const value = noteInput.value.trim() || null;
+		if (value === (r.note || null)) return;
+		r.note = value;
+		saveRow(r);
+	};
+	noteInput.addEventListener("keydown", (e) => {
+		if (e.key === "Escape") return;   // let it bubble so the panel closes
+		e.stopPropagation();              // keys must not trigger reader shortcuts
+		if (e.key === "Enter") saveNote();
+	});
+	noteInput.addEventListener("blur", saveNote);
+	noteBox.append(noteInput);
+	box.insertBefore(noteBox, add);
+
 	// Setting a goal without leaving the book. The item's own goal is the one
 	// worth having here; collection and library-wide goals live in the Goals tab.
 	const rebuild = () => safe(() => tryFill(doc, box, reader));
@@ -897,6 +942,10 @@ function fillPanel(doc, box, item, reader) {
 				b.mark.title = b.g.completedAt ? "Reopen this goal" : "Mark as read — finished early";
 			}
 		}
+		const jotting = notable();
+		noteBox.hidden = !jotting;
+		// Never overwrite what is being typed.
+		if (jotting && doc.activeElement !== noteInput) noteInput.value = jotting.note || "";
 		pomLabel.textContent = `🍅 Focus ${focusMin}m`;
 		stats.forEach(([, get], i) => { values[i].textContent = fmtTotal(safe(get, 0)) || "0m"; });
 		const mine = isMine(item);
@@ -1226,6 +1275,11 @@ h1 { font-size:15px; margin:0 0 12px; }
 .session .mode { flex:1; min-width:0; }
 .session b { color:CanvasText; font-variant-numeric:tabular-nums; }
 .session .act { display:flex; gap:4px; align-items:center; }
+.snote { font-size:11px; color:CanvasText; padding:0 4px 3px 54px; cursor:text; overflow-wrap:anywhere; }
+.snote.empty { color:GrayText; opacity:0; }
+.session-wrap:hover .snote.empty { opacity:1; }
+.snote-input { width:calc(100% - 58px); margin:0 4px 3px 54px; padding:2px 5px; font:11px sans-serif;
+	background:Canvas; color:CanvasText; border:1px solid GrayText; border-radius:4px; }
 
 /* heatmap */
 body { --l0:#ebedf0; --l1:#9be9a8; --l2:#40c463; --l3:#30a14e; --l4:#216e39; }
@@ -1349,6 +1403,7 @@ function heatmapEls(doc, rows) {
 // One logged session: when it started, how it was tracked, how long — and the
 // two things you can do to it. Editing writes an absolute duration; 0 deletes.
 function sessionRow(doc, win, r) {
+	const wrap = el(doc, "div", "session-wrap");
 	const line = el(doc, "div", "session");
 	const live = !!(timer && timer.row === r);
 	line.append(
@@ -1370,7 +1425,42 @@ function sessionRow(doc, win, r) {
 	}
 	line.append(act);
 	line.addEventListener("click", (e) => e.stopPropagation());  // don't collapse the list
-	return line;
+
+	// The note lives under its session and is edited where it sits — no dialog
+	// for one line of text.
+	const note = el(doc, "div", "snote");
+	const show = () => {
+		note.textContent = r.note || "Add a note…";
+		note.className = r.note ? "snote" : "snote empty";
+	};
+	const edit = () => {
+		const input = doc.createElement("input");
+		input.type = "text";
+		input.className = "snote-input";
+		input.value = r.note || "";
+		input.placeholder = "What did you read?";
+		let closed = false;
+		const close = (save) => {
+			if (closed) return;
+			closed = true;
+			if (save) { r.note = input.value.trim() || null; saveRow(r); }
+			input.replaceWith(note);
+			show();
+		};
+		input.addEventListener("keydown", (e) => {
+			e.stopPropagation();
+			if (e.key === "Enter") close(true);
+			else if (e.key === "Escape") close(false);
+		});
+		input.addEventListener("blur", () => close(true));
+		note.replaceWith(input);
+		input.focus();
+	};
+	note.addEventListener("click", (e) => { e.stopPropagation(); edit(); });
+	show();
+
+	wrap.append(line, note);
+	return wrap;
 }
 
 function editSession(win, r) {

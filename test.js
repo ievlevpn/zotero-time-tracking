@@ -257,7 +257,7 @@ global.Zotero.Collections = { get: () => null, getByLibraryAndKey: () => null };
 book.getCollections = () => [];
 
 I.log.length = 0;
-I.log.push({ id: "h1", libraryID: 1, itemKey: "BOOK", title: "A Book", mode: "stopwatch", started: Date.now() - 3600e3, seconds: 1860 },
+I.log.push({ id: "h1", libraryID: 1, itemKey: "BOOK", title: "A Book", mode: "stopwatch", started: Date.now() - 3600e3, seconds: 1860, note: "ch. 3-4, the argument about coinage" },
 	{ id: "h2", libraryID: 1, itemKey: "BOOK", title: "A Book", mode: "pomodoro", started: Date.now() - 86400000, seconds: 3000 });
 I.goals.push({ id: "g1", libraryID: 1, scope: "item", key: "BOOK", seconds: 7200, period: "total", updatedAt: Date.now() });
 
@@ -273,5 +273,13 @@ I.buildHistory({ document: doc });
 assert.strictEqual(drawn(doc.body, "day"), 2, "one header per day");
 assert.strictEqual(drawn(doc.body, "item"), 2, "and its items under it — not just the header");
 assert.strictEqual(drawn(doc.body, "sessions"), 2, "each with its sessions");
+
+// A session's note is drawn under it, and an empty one still offers the slot.
+const notes = [];
+const walk = (n) => { if ((n.className || "").startsWith("snote")) notes.push(n); (n.children || []).forEach(walk); };
+doc.body.children.forEach(walk);
+assert.strictEqual(notes.length, 2, "every session has a note line");
+assert.ok(notes.some((n) => n.textContent.includes("coinage")), "the written note is shown");
+assert.ok(notes.some((n) => n.className.includes("empty")), "an unwritten one is an invitation, not a blank");
 
 console.log("ok");
