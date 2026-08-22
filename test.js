@@ -246,9 +246,12 @@ const node = (tag) => ({ tag, className: "", textContent: "", id: "", title: "",
 	append(...c) { for (const x of c) if (x && typeof x === "object") { x.parentElement = this; this.children.push(x); } },
 	insertBefore(n) { n.parentElement = this; this.children.push(n); },
 	replaceChildren(...c) { this.children = []; this.append(...c); },
-	addEventListener() {}, remove() {}, querySelectorAll: () => [], focus() {} });
-const fakeDoc = () => ({ defaultView: {}, head: node("head"), body: node("body"), title: "",
-	createElement: node, getElementById: () => null, querySelectorAll: () => [] });
+	listeners: {},
+	addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); },
+	remove() {}, querySelectorAll: () => [], focus() {}, replaceWith() {} });
+const fakeDoc = () => ({ defaultView: { innerWidth: 900 }, head: node("head"), body: node("body"), title: "",
+	createElement: node, getElementById: () => null, querySelectorAll: () => [],
+	addEventListener() {}, removeEventListener() {} });
 
 global.Zotero.getMainWindow = () => ({ ZoteroPane: { selectItem() {} }, focus() {} });
 global.Zotero.Items.getIDFromLibraryAndKey = () => 1;
@@ -281,5 +284,30 @@ doc.body.children.forEach(walk);
 assert.strictEqual(notes.length, 2, "every session has a note line");
 assert.ok(notes.some((n) => n.textContent.includes("coinage")), "the written note is shown");
 assert.ok(notes.some((n) => n.className.includes("empty")), "an unwritten one is an invitation, not a blank");
+
+// --- a note typed in the popup survives the popup closing ------------------
+// Clicking outside closes the panel on pointerdown, which removes the focused
+// input — and removing a focused element fires no blur. Enter was the only way
+// the text ever reached the database.
+const panelDoc = fakeDoc();
+const button = node("button");
+button.getBoundingClientRect = () => ({ bottom: 20, left: 10 });
+const reader = { itemID: 10 };
+I.log.length = 0;
+I.log.push({ id: "n1", libraryID: 1, itemKey: "BOOK", title: "A Book", mode: "stopwatch",
+	started: Date.now() - 600e3, seconds: 900, note: null });
+
+I.openPanel(reader, panelDoc, button);
+const inputs = [];
+const findInputs = (n) => { if (n.tag === "input") inputs.push(n); (n.children || []).forEach(findInputs); };
+panelDoc.body.children.forEach(findInputs);
+const noteField = inputs.find((i) => (i.placeholder || "").includes("Note for this session"));
+assert.ok(noteField, "the popup offers a note field");
+
+noteField.value = "ch. 3-4, the argument about coinage";
+noteField.listeners.input.forEach((fn) => fn());     // typing marks it dirty
+I.closePanel();                                       // clicked outside; no blur fires
+assert.strictEqual(I.log[0].note, "ch. 3-4, the argument about coinage",
+	"closing the popup commits what was typed");
 
 console.log("ok");

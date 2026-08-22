@@ -680,6 +680,7 @@ function togglePanel(reader, doc, btn) {
 
 function closePanel() {
 	if (!panel) return;
+	safe(panel.flush);   // a half-typed note is still a note
 	panel.cleanup();
 	panel.el.remove();
 	panel = null;
@@ -700,7 +701,7 @@ function openPanel(reader, doc, btn) {
 
 	// Publish the panel before filling it, so however the rest of this function
 	// goes, what is on screen is always what closePanel() and paint() act on.
-	panel = { el: box, btn, cleanup: () => {}, refresh: () => {} };
+	panel = { el: box, btn, cleanup: () => {}, refresh: () => {}, flush: () => {} };
 	panel.cleanup = watchOutside(reader, doc, box, btn);
 	tryFill(doc, box, reader);
 }
@@ -715,8 +716,10 @@ function tryFill(doc, box, reader) {
 		panel.refresh = () => safe(() => tryFill(doc, box, reader));
 		return;
 	}
+	safe(panel.flush);          // rebuilding is a close, as far as pending text goes
 	box.replaceChildren();
 	panel.refresh = () => {};
+	panel.flush = () => {};
 	safe(() => fillPanel(doc, box, item, reader));   // sets panel.refresh when it succeeds
 	safe(() => panel.refresh());
 }
@@ -842,7 +845,12 @@ function fillPanel(doc, box, item, reader) {
 	const noteInput = doc.createElement("input");
 	noteInput.type = "text";
 	noteInput.placeholder = "📝 Note for this session…";
+	// Typed-but-uncommitted text, tracked explicitly: the 1 Hz refresh must not
+	// overwrite what is being typed, and relying on activeElement is fragile
+	// once the popup can be torn out from under a focused field.
+	let noteDirty = false;
 	const saveNote = () => {
+		noteDirty = false;
 		const r = notable();
 		if (!r) return;
 		const value = noteInput.value.trim() || null;
@@ -850,6 +858,7 @@ function fillPanel(doc, box, item, reader) {
 		r.note = value;
 		saveRow(r);
 	};
+	noteInput.addEventListener("input", () => { noteDirty = true; });
 	noteInput.addEventListener("keydown", (e) => {
 		if (e.key === "Escape") return;   // let it bubble so the panel closes
 		e.stopPropagation();              // keys must not trigger reader shortcuts
@@ -945,7 +954,7 @@ function fillPanel(doc, box, item, reader) {
 		const jotting = notable();
 		noteBox.hidden = !jotting;
 		// Never overwrite what is being typed.
-		if (jotting && doc.activeElement !== noteInput) noteInput.value = jotting.note || "";
+		if (jotting && !noteDirty) noteInput.value = jotting.note || "";
 		pomLabel.textContent = `🍅 Focus ${focusMin}m`;
 		stats.forEach(([, get], i) => { values[i].textContent = fmtTotal(safe(get, 0)) || "0m"; });
 		const mine = isMine(item);
@@ -977,6 +986,7 @@ function fillPanel(doc, box, item, reader) {
 	};
 
 	panel.refresh = refresh;
+	panel.flush = saveNote;
 }
 
 // --- history window --------------------------------------------------------
@@ -1889,7 +1899,7 @@ if (typeof module !== "undefined") {
 	// Enough of the machinery for test.js to drive a whole session. A smoke test
 	// is what catches an edit that quietly deletes a function everything calls.
 	module.exports.__internals = {
-		start, stop, tick, paint, setPaused, checkOrphaned, buildHistory, log, goals, bars,
+		start, stop, tick, paint, setPaused, checkOrphaned, buildHistory, openPanel, closePanel, log, goals, bars,
 		setActive: (v) => { active = v; }, setDB: (v) => { db = v; }, getTimer: () => timer,
 		setRegistered: (col, row) => { columnKey = col; infoRowID = row; },
 	};
