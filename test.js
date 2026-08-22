@@ -237,4 +237,41 @@ assert.ok(written.includes("UPDATE"), "the final duration is written");
 assert.deepStrictEqual([...new Set(logged.map((e) => e.name))].sort(), ["UnloadedDataException"],
 	"unexpected errors were swallowed: " + logged.map((e) => e.message).join("; "));
 
+// --- the history window renders end to end --------------------------------
+// buildHistory() is called inside safe(), so a throw halfway through leaves a
+// half-drawn window and says nothing. That is exactly how a stray edit once
+// emptied the day list below its headers. Draw it against a fake DOM instead.
+const node = (tag) => ({ tag, className: "", textContent: "", id: "", title: "", hidden: false,
+	style: {}, dataset: {}, children: [], isConnected: true, parentElement: null,
+	append(...c) { for (const x of c) if (x && typeof x === "object") { x.parentElement = this; this.children.push(x); } },
+	insertBefore(n) { n.parentElement = this; this.children.push(n); },
+	replaceChildren(...c) { this.children = []; this.append(...c); },
+	addEventListener() {}, remove() {}, querySelectorAll: () => [], focus() {} });
+const fakeDoc = () => ({ defaultView: {}, head: node("head"), body: node("body"), title: "",
+	createElement: node, getElementById: () => null, querySelectorAll: () => [] });
+
+global.Zotero.getMainWindow = () => ({ ZoteroPane: { selectItem() {} }, focus() {} });
+global.Zotero.Items.getIDFromLibraryAndKey = () => 1;
+global.Zotero.Items.getByLibraryAndKey = () => book;
+global.Zotero.Collections = { get: () => null, getByLibraryAndKey: () => null };
+book.getCollections = () => [];
+
+I.log.length = 0;
+I.log.push({ id: "h1", libraryID: 1, itemKey: "BOOK", title: "A Book", mode: "stopwatch", started: Date.now() - 3600e3, seconds: 1860 },
+	{ id: "h2", libraryID: 1, itemKey: "BOOK", title: "A Book", mode: "pomodoro", started: Date.now() - 86400000, seconds: 3000 });
+I.goals.push({ id: "g1", libraryID: 1, scope: "item", key: "BOOK", seconds: 7200, period: "total", updatedAt: Date.now() });
+
+const drawn = (body, cls) => body.children.filter((c) => c.className === cls).length;
+for (const view of ["days", "collections", "goals"]) {
+	const doc = fakeDoc();
+	I.buildHistory({ document: doc, __view: view });
+	assert.ok(doc.body.children.length > 1, `${view} view drew something`);
+}
+
+const doc = fakeDoc();
+I.buildHistory({ document: doc });
+assert.strictEqual(drawn(doc.body, "day"), 2, "one header per day");
+assert.strictEqual(drawn(doc.body, "item"), 2, "and its items under it — not just the header");
+assert.strictEqual(drawn(doc.body, "sessions"), 2, "each with its sessions");
+
 console.log("ok");

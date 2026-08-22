@@ -500,9 +500,12 @@ const CSS = `
 .rt-panel .rt-add button { flex:0 0 auto; }
 .rt-panel .rt-goal { margin-top:8px; }
 .rt-panel .rt-goalbtn { width:100%; margin-top:8px; }
-.rt-panel .rt-mark { flex:0 0 auto; font:11px sans-serif; padding:0 5px; margin-left:4px;
-	border:1px solid transparent; border-radius:4px; background:transparent; color:CanvasText; cursor:pointer; }
-.rt-panel .rt-goal:hover .rt-mark { border-color:GrayText; }
+.rt-panel .rt-goal .rt-row .rt-muted { flex:1; min-width:0; overflow:hidden;
+	text-overflow:ellipsis; white-space:nowrap; }
+.rt-panel .rt-mark { flex:0 0 auto; font:12px/1 sans-serif; padding:1px 4px; margin-left:2px;
+	border:1px solid transparent; border-radius:4px; background:transparent;
+	color:GrayText; cursor:pointer; }
+.rt-panel .rt-goal:hover .rt-mark { color:CanvasText; border-color:GrayText; }
 .rt-panel .rt-goaledit { margin-top:8px; border-top:1px solid GrayText; padding-top:8px; }
 .rt-panel .rt-seg { display:flex; gap:4px; margin-top:6px; }
 .rt-panel .rt-seg button.on { background:Highlight; color:HighlightText; }
@@ -518,11 +521,16 @@ const CSS = `
 `;
 
 function injectCSS(doc) {
-	if (doc.getElementById("rt-css")) return;
-	const style = doc.createElement("style");
-	style.id = "rt-css";
-	style.textContent = CSS;
-	(doc.head || doc.documentElement).append(style);
+	let style = doc.getElementById("rt-css");
+	if (!style) {
+		style = doc.createElement("style");
+		style.id = "rt-css";
+		(doc.head || doc.documentElement).append(style);
+	}
+	// Replace the contents rather than bailing when the element exists: after an
+	// upgrade a reader tab still holds the previous version's stylesheet, and
+	// every rule added since would be missing until the tab was reopened.
+	if (style.textContent !== CSS) style.textContent = CSS;
 }
 
 // A toolbar's item, resolved once and kept. Resolving it per tick meant a
@@ -1340,13 +1348,6 @@ function sessionRow(doc, win, r) {
 	if (live) {
 		act.append(el(doc, "span", "n", "stop the timer to edit"));
 	} else {
-		if (canComplete(g)) {
-			const mark = el(doc, "button", null, g.completedAt ? "↺" : "✓");
-			mark.title = g.completedAt ? "Not finished after all — reopen this goal"
-				: "Mark as read — finished early";
-			mark.addEventListener("click", () => { toggleComplete(g); safe(() => buildHistory(win)); });
-			head.append(mark);
-		}
 		const edit = el(doc, "button", null, "✎");
 		edit.title = "Change this session's duration";
 		edit.addEventListener("click", (e) => { e.stopPropagation(); editSession(win, r); });
@@ -1786,7 +1787,7 @@ if (typeof module !== "undefined") {
 	// Enough of the machinery for test.js to drive a whole session. A smoke test
 	// is what catches an edit that quietly deletes a function everything calls.
 	module.exports.__internals = {
-		start, stop, tick, paint, setPaused, checkOrphaned, log, bars,
+		start, stop, tick, paint, setPaused, checkOrphaned, buildHistory, log, goals, bars,
 		setActive: (v) => { active = v; }, setDB: (v) => { db = v; }, getTimer: () => timer,
 		setRegistered: (col, row) => { columnKey = col; infoRowID = row; },
 	};
