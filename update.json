@@ -3,8 +3,8 @@
     "reading-time@local": {
       "updates": [
         {
-          "version": "0.26.1",
-          "update_link": "https://github.com/ievlevpn/zotero-time-tracking/releases/download/v0.26.1/reading-time.xpi",
+          "version": "0.27.0",
+          "update_link": "https://github.com/ievlevpn/zotero-time-tracking/releases/download/v0.27.0/reading-time.xpi",
           "applications": {
             "zotero": {
               "strict_min_version": "9.999",
