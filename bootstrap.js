@@ -1145,6 +1145,14 @@ const canComplete = (g) => g.period === "total";
 
 function toggleComplete(g) {
 	const marking = !g.completedAt;
+	// Finished is finished: if what's being timed counts toward this goal, it
+	// stops — and stops first, so its last seconds land before the goal closes.
+	// The goal's own matcher decides, so this reads the same for a book, a
+	// collection, or all reading.
+	if (marking && timer) {
+		const matches = safe(() => goalMatcher(g), null);
+		if (matches && safe(() => matches(timer.row), false)) stop();
+	}
 	g.completedAt = marking ? Date.now() : null;
 	saveGoal(g);
 	if (g.scope === "item") applyReadTag(g, marking);

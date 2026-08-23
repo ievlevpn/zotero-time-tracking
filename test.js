@@ -416,6 +416,65 @@ assert.strictEqual(I.readerOpenFor("1/BOOK"), true, "the other attachment still 
 openReaders = [];
 assert.strictEqual(I.readerOpenFor("1/BOOK"), false, "the last one closed ends it");
 
+// --- marking a book read tags it, and stops its timer ---------------------
+// Only ever from a click: nothing tags an item on its own, however much time it
+// has had. The tag is asked for once and then remembered.
+let prefs = {};
+global.Zotero.Prefs = { get: (k) => prefs[k], set: (k, v) => { prefs[k] = v; } };
+let asked = 0;
+global.Services = { prompt: { prompt: (win, title, text, out) => { asked++; out.value = "read"; return true; } } };
+const tagged = [];
+const taggedItem = { hasTag: (t) => tagged.includes(t), addTag: (t) => tagged.push(t),
+	removeTag: (t) => tagged.splice(tagged.indexOf(t), 1), saveTx: () => {} };
+global.Zotero.Items.getByLibraryAndKey = () => taggedItem;
+global.Zotero.ProgressWindow = function () { this.changeHeadline = () => {}; this.show = () => {}; this.startCloseTimer = () => {}; };
+
+I.goals.length = 0;
+I.log.length = 0;
+const bookGoal = { id: "t1", libraryID: 1, scope: "item", key: "BOOK", seconds: 3600, period: "total", updatedAt: 1 };
+I.goals.push(bookGoal);
+
+// Finishing a goal stops whatever is being timed toward it — and only that.
+I.start("stopwatch", book);
+I.getTimer().counted = 240;
+const timedRow = I.getTimer().row;
+const elsewhere = { id: "t0", libraryID: 1, scope: "item", key: "ELSEWHERE", seconds: 3600, period: "total", updatedAt: 1 };
+I.goals.push(elsewhere);
+I.toggleComplete(elsewhere);
+assert.ok(I.getTimer(), "a goal on another book leaves the timer running");
+I.goals.splice(I.goals.indexOf(elsewhere), 1);
+
+I.toggleComplete(bookGoal);
+assert.strictEqual(I.getTimer(), null, "finishing the book stops its timer");
+assert.strictEqual(timedRow.seconds, 240, "with its last seconds saved first");
+assert.strictEqual(asked, 1, "asked for a tag once, the first time");
+assert.deepStrictEqual(tagged, ["read"], "and the item is tagged");
+
+I.toggleComplete(bookGoal);                        // reopened
+assert.deepStrictEqual(tagged, [], "reopening takes the tag off again");
+assert.strictEqual(asked, 1, "and never asks again");
+
+// Declining is remembered as declining, not as "ask me later".
+prefs = {}; asked = 0;
+global.Services.prompt.prompt = (win, title, text, out) => { asked++; out.value = "  "; return true; };
+I.toggleComplete(bookGoal);
+assert.deepStrictEqual(tagged, [], "no tag when none was wanted");
+assert.strictEqual(prefs["readingTime.readTag"], "", "the choice is stored");
+I.toggleComplete(bookGoal);
+assert.strictEqual(asked, 1, "and not asked a second time");
+
+// Reaching a target on its own is not a click: it tags nothing.
+prefs = { "readingTime.readTag": "read" };
+I.goals.length = 0;
+I.log.length = 0;
+I.log.push({ id: "tl", libraryID: 1, itemKey: "BOOK", title: "A Book", mode: "stopwatch", started: Date.now(), seconds: 99999 });
+I.goals.push({ id: "t2", libraryID: 1, scope: "item", key: "BOOK", seconds: 60, period: "total", updatedAt: 1 });
+I.checkGoals();
+assert.deepStrictEqual(tagged, [], "a goal reached on its own tags nothing");
+assert.strictEqual(I.goals[0].completedAt, undefined, "and is not marked read");
+I.goals.length = 0;
+I.log.length = 0;
+
 // --- what happens when things go sideways ---------------------------------
 const book2 = { id: 2, libraryID: 1, key: "BOOK2", isRegularItem: () => true,
 	getDisplayTitle: () => "Another Book", getCollections: () => [] };
