@@ -500,6 +500,25 @@ for (const wide of [
 global.Zotero.Items.getByLibraryAndKey = realLookup;
 I.goals.length = 0;
 
+// The popup's own "mark as read" just tags, with no goal in sight — and unlike
+// the goal button it asks even if tagging was declined before, since clicking it
+// is someone asking for the tag directly.
+prefs = {}; asked = 0;
+global.Services.prompt.prompt = (win, title, text, out) => { asked++; out.value = "read"; return true; };
+I.goals.length = 0;
+I.toggleRead(taggedItem);
+assert.deepStrictEqual(tagged, ["read"], "tags the item");
+assert.strictEqual(I.goals.length, 0, "and creates no goal");
+I.toggleRead(taggedItem);
+assert.deepStrictEqual(tagged, [], "clicking again takes it off");
+
+prefs = { "readingTime.readTag": "" };   // declined earlier, for goals
+asked = 0;
+I.toggleRead(taggedItem);
+assert.strictEqual(asked, 1, "an explicit click asks again");
+assert.deepStrictEqual(tagged, ["read"], "and tags once a tag is given");
+tagged.length = 0;
+
 // --- what happens when things go sideways ---------------------------------
 const book2 = { id: 2, libraryID: 1, key: "BOOK2", isRegularItem: () => true,
 	getDisplayTitle: () => "Another Book", getCollections: () => [] };

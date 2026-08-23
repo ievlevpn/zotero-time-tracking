@@ -570,7 +570,6 @@ const CSS = `
 .rt-panel .rt-note { margin-top:8px; }
 .rt-panel .rt-note input { width:100%; box-sizing:border-box; padding:4px 6px; font:12px sans-serif;
 	background:Canvas; color:CanvasText; border:1px solid GrayText; border-radius:4px; }
-.rt-panel .rt-goalbtn { width:100%; margin-top:8px; }
 .rt-panel .rt-goal .rt-row .rt-muted { flex:1; min-width:0; overflow:hidden;
 	text-overflow:ellipsis; white-space:nowrap; }
 .rt-panel .rt-mark { flex:0 0 auto; font:12px/1 sans-serif; padding:1px 4px; margin-left:2px;
@@ -914,7 +913,11 @@ function fillPanel(doc, box, item, reader) {
 	const ownGoal = (period) => goals.find((g) => g.scope === "item" && g.libraryID === item.libraryID
 		&& g.key === item.key && (!period || g.period === period));
 
-	const goalBtn = el(doc, "button", "rt-goalbtn", ownGoal() ? "🎯 Change goal…" : "🎯 Set a goal…");
+	const buttons = el(doc, "div", "rt-actions");
+	const goalBtn = el(doc, "button", null, ownGoal() ? "🎯 Change goal…" : "🎯 Set a goal…");
+	const readBtn = el(doc, "button", null, "✓ Mark as read");
+	readBtn.addEventListener("click", () => { toggleRead(item); rebuild(); });
+	buttons.append(goalBtn, readBtn);
 	const editor = el(doc, "div", "rt-goaledit");
 	const gInput = doc.createElement("input");
 	gInput.type = "text";
@@ -929,12 +932,12 @@ function fillPanel(doc, box, item, reader) {
 	gButtons.append(gSave, gDrop, gCancel);
 	editor.append(gFields, gPeriod.el, gButtons);
 	editor.hidden = true;
-	box.insertBefore(goalBtn, add);
+	box.insertBefore(buttons, add);
 	box.insertBefore(editor, add);
 
 	const editing = (on) => {
 		editor.hidden = !on;
-		goalBtn.hidden = on;
+		buttons.hidden = on;
 		if (!on) return;
 		const g = ownGoal();
 		gInput.value = g ? fmtTotal(g.seconds) : "";
@@ -998,6 +1001,10 @@ function fillPanel(doc, box, item, reader) {
 			noteDirty = false;
 		}
 		else if (!noteDirty) noteInput.value = jotting.note || "";   // never overwrite typing
+		const tagName = readTag();
+		const isRead = tagName && safe(() => item.hasTag(tagName), false);
+		readBtn.textContent = isRead ? `✓ Read` : "✓ Mark as read";
+		readBtn.title = isRead ? `Remove the “${tagName}” tag` : "Tag this item as read in Zotero";
 		pomLabel.textContent = `🍅 Focus ${focusMin}m`;
 		stats.forEach(([, get], i) => { values[i].textContent = fmtTotal(safe(get, 0)) || "0m"; });
 		const mine = isMine(item);
@@ -1180,12 +1187,24 @@ function applyReadTag(g, marking) {
 	if (!tag) return;
 	safe(() => {
 		const item = Zotero.Items.getByLibraryAndKey(g.libraryID, g.key);
-		if (!item) return;
-		if (marking === item.hasTag(tag)) return;      // already how it should be
-		if (marking) item.addTag(tag);
-		else item.removeTag(tag);
-		item.saveTx();
+		if (item) setTag(item, tag, marking);
 	});
+}
+
+function setTag(item, tag, on) {
+	if (on === item.hasTag(tag)) return;      // already how it should be
+	if (on) item.addTag(tag);
+	else item.removeTag(tag);
+	item.saveTx();
+}
+
+// The reader's own "I have read this", with no goal involved. An explicit click
+// asks for the tag even if it was declined earlier — declining was an answer
+// about goals marking things read, and this is someone asking for it directly.
+function toggleRead(item) {
+	const tag = readTag() || askReadTag();
+	if (!tag) return;
+	safe(() => setTag(item, tag, !item.hasTag(tag)));
 }
 
 // The sessions a goal counts. Resolved when asked, never stored: collection
@@ -2134,6 +2153,7 @@ if (typeof module !== "undefined") {
 		reparentRows, idFor, readerOpenFor, shutdown, log, goals, bars,
 		setView: (v) => { historyView = v; },
 		setPick: (v) => { goalPick = v; },
+		toggleRead,
 		commitGoal, toggleComplete, applyReadTag, checkGoals,
 		setActive: (v) => { active = v; }, setDB: (v) => { db = v; }, getTimer: () => timer,
 		setRegistered: (col, row) => { columnKey = col; infoRowID = row; },

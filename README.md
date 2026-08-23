@@ -16,6 +16,9 @@ ways to log time on the item you're reading:
   toward reading time. The length can still be adjusted mid-run, and is
   remembered in `extensions.zotero.readingTime.focusMin`.
 - **Manual entry** — type `25`, `1h 30m`, `45s`, or `-10` to subtract.
+- **✓ Mark as read** — tags the item in Zotero and nothing else: no goal, no
+  session, no bookkeeping. Click it again to take the tag off. It uses the same
+  tag as goals do, asking for one the first time.
 - **A note** — one line about what you read, belonging to the session being
   timed. Stopping saves it and empties the field, so what's on screen is always
   the note for what's running now. Notes sit on their sessions line in the history window, where any of them can still be written or changed later.
