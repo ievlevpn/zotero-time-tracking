@@ -298,8 +298,8 @@ const piles = fakeDoc();
 I.setView("goals");
 I.buildHistory({ document: piles });
 const headers = piles.body.children.filter((c) => c.className === "day").map((c) => c.textContent);
-assert.deepStrictEqual(headers, ["Books", "Collections", "All reading", "Finished"],
-	"one pile per kind, finished last");
+assert.deepStrictEqual(headers, ["All reading", "Books", "Collections", "Finished"],
+	"the goal covering everything leads; finished ones go last");
 I.goals.length = 0;
 
 for (const view of ["days", "collections", "goals"]) {

@@ -61,14 +61,14 @@ collections change, sessions don't.
 
 ## Goals
 
-The **Goals** tab adds them: **＋ Book** and **＋ Collection** offer what you've
-actually read, filtered as you type, and **＋ All reading** covers the library.
+The **Goals** tab adds them: **＋ Book** and **＋ Collection** search your whole
+library, filtered as you type, and **＋ All reading** covers everything.
 You can also set one on the book in front of you from the reader popup — **🎯
 Set a goal…**, or by clicking an existing goal's bar — or right-click any book
 or collection in the library → **Set reading goal…**.
 
-Goals are filed by what they're about — **Books**, **Collections**, **All
-reading** — with **Finished** last: a one-off goal leaves the pile once it's
+Goals are filed by what they're about — **All reading** first, then **Books**
+and **Collections** — with **Finished** last: a one-off goal leaves the pile once it's
 marked read or the time is in. Recurring goals never do, since they start again. A goal is a target plus a period:
 
 - `20h` **once** (the default), optionally by a date — the window then shows the pace
@@ -80,6 +80,10 @@ it counts as done however much time it actually took, and the goal keeps the
 real figure (`Marked read 21/08 · 8h 40m of 15h`) rather than pretending you
 spent the hours. **↺** reopens it. Recurring goals have no ✓: a weekly target
 starts again on Monday, so there is nothing to finish early.
+
+A goal's title is a link: it selects that book or collection in the library.
+There is only ever one *all reading* goal — a second would be a competing
+answer to the same question, so setting one replaces it.
 
 Collection goals count sub-collections, and an item counts towards both its own
 goal and any collection goal covering it. `All reading` goals cover the whole

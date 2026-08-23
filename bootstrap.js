@@ -1296,6 +1296,8 @@ h1 { font-size:15px; margin:0 0 12px; }
 .top button.on { background:Highlight; color:HighlightText; }
 .goal { margin:14px 0; }
 .picker { max-height:260px; overflow-y:auto; margin:8px 0; }
+.goal-head .link { cursor:pointer; }
+.goal-head .link:hover { text-decoration:underline; }
 .goal-head { display:flex; align-items:baseline; gap:8px; }
 .goal-head .t { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
 .goal-head button { font:11px sans-serif; padding:0 5px; border:1px solid transparent; border-radius:4px;
@@ -1574,6 +1576,24 @@ function startGoal(target) {
 	openHistory(null);
 }
 
+// Save a draft as a goal. One goal per target per period — except "all
+// reading", where a second would just be a competing answer to the same
+// question, so it replaces whatever was there.
+function commitGoal(draft, seconds, period, deadline) {
+	const g = goals.find((x) => x.libraryID === draft.libraryID && x.scope === draft.scope
+		&& (x.key || null) === (draft.key || null)
+		&& (x.scope === "all" || x.period === period))
+		|| { id: Zotero.Utilities.randomString(12), libraryID: draft.libraryID, scope: draft.scope, key: draft.key || null };
+	Object.assign(g, { seconds, period, deadline: deadline || null, notifiedAt: null });
+	saveGoal(g);
+	if (g.scope === "all") {
+		for (const other of goals.slice()) {
+			if (other !== g && other.scope === "all" && other.libraryID === g.libraryID) dropGoal(other);
+		}
+	}
+	return g;
+}
+
 function goalEditor(doc, win) {
 	const box = el(doc, "div", "editor");
 	const title = goalDraft.title || goalTitle(goalDraft) || "this item";
@@ -1600,16 +1620,8 @@ function goalEditor(doc, win) {
 	save.addEventListener("click", () => safe(() => {
 		const seconds = Math.round(parseDuration(target.value));
 		if (seconds <= 0) { target.focus(); return; }
-		// A goal already on this target for this period is the one we're editing,
-		// whatever the draft started as — the unique index says so too.
-		const g = goals.find((x) => x.libraryID === goalDraft.libraryID && x.scope === goalDraft.scope
-			&& (x.key || null) === (goalDraft.key || null) && x.period === period.value)
-			|| { id: Zotero.Utilities.randomString(12), libraryID: goalDraft.libraryID, scope: goalDraft.scope, key: goalDraft.key || null };
-		Object.assign(g, {
-			seconds, period: period.value, notifiedAt: null,
-			deadline: period.value === "total" && by.value ? new Date(by.value + "T00:00:00").getTime() : null,
-		});
-		saveGoal(g);
+		commitGoal(goalDraft, seconds, period.value,
+			period.value === "total" && by.value ? new Date(by.value + "T00:00:00").getTime() : null);
 		goalDraft = null;
 		buildHistory(win);
 	}));
@@ -1627,6 +1639,22 @@ function goalDone(g, done) {
 	return g.period === "total" && (!!g.completedAt || done >= g.seconds);
 }
 
+// Take me to the thing this goal is about.
+function reveal(g) {
+	safe(() => {
+		const main = Zotero.getMainWindow();
+		if (!main) return;
+		if (g.scope === "collection") {
+			const collection = Zotero.Collections.getByLibraryAndKey(g.libraryID, g.key);
+			if (collection) main.ZoteroPane.collectionsView.selectCollection(collection.id);
+		} else {
+			const itemID = Zotero.Items.getIDFromLibraryAndKey(g.libraryID, g.key);
+			if (itemID) main.ZoteroPane.selectItem(itemID);
+		}
+		main.focus();
+	});
+}
+
 function goalRow(doc, win, g, now) {
 	const matches = goalMatcher(g);
 	const name = goalTitle(g);
@@ -1634,7 +1662,13 @@ function goalRow(doc, win, g, now) {
 
 	const box = el(doc, "div", "goal");
 	const head = el(doc, "div", "goal-head");
-	head.append(el(doc, "span", "t", name || "(deleted)"),
+	const title = el(doc, "span", "t", name || "(deleted)");
+	if (name && g.scope !== "all") {
+		title.className = "t link";
+		title.title = g.scope === "collection" ? "Show this collection" : "Show this book";
+		title.addEventListener("click", () => reveal(g));
+	}
+	head.append(title,
 		el(doc, "span", "rt-muted", `${fmtTotal(g.seconds)} ${periodLabel[g.period]}`),
 		el(doc, "b", null, `${fmtTotal(done) || "0m"} / ${fmtTotal(g.seconds)}`));
 
@@ -1670,62 +1704,64 @@ function goalRow(doc, win, g, now) {
 	return box;
 }
 
-// Pick what a new goal is about, from what you have actually read: a goal on a
-// book you have never opened is a wish, and the library is where those are made.
+// Pick what a new goal is about. The whole library, not only what has been read
+// — a goal is usually set on the book you are about to start.
 function goalPicker(doc, win) {
 	const wanted = goalPick;
 	const taken = new Set(goals.filter((g) => g.scope === wanted).map((g) => g.libraryID + "/" + g.key));
-	let choices;
-	if (wanted === "collection") {
-		choices = byCollection(log).map((c) => {
-			const collection = safe(() => Zotero.Collections.get(c.id), null);
-			return collection && { libraryID: collection.libraryID, key: collection.key, title: c.name, seconds: c.seconds };
-		}).filter(Boolean);
-	} else {
-		const totals = new Map();
-		for (const r of log) {
-			const id = r.libraryID + "/" + r.itemKey;
-			const at = totals.get(id) || { libraryID: r.libraryID, key: r.itemKey, title: r.title, seconds: 0 };
-			at.seconds += r.seconds;
-			at.title = currentTitle({ libraryID: r.libraryID, itemKey: r.itemKey }) || r.title || at.title;
-			totals.set(id, at);
-		}
-		choices = [...totals.values()].sort((a, b) => b.seconds - a.seconds);
-	}
-	choices = choices.filter((c) => !taken.has(c.libraryID + "/" + c.key));
+	const libraryID = safe(() => Zotero.Libraries.userLibraryID, 1);
 
 	const box = el(doc, "div", "editor");
-	box.append(el(doc, "div", "rt-muted",
-		wanted === "collection" ? "Which collection?" : "Which book?"));
+	box.append(el(doc, "div", "rt-muted", wanted === "collection" ? "Which collection?" : "Which book?"));
 	const search = doc.createElement("input");
 	search.type = "search";
 	search.className = "search";
 	search.placeholder = "Filter…";
 	const list = el(doc, "div", "picker");
+	const cancel = el(doc, "button", null, "Cancel");
+	cancel.addEventListener("click", () => { goalPick = null; safe(() => buildHistory(win)); });
+	box.append(search, list, cancel);
+
+	let choices = null;   // null while loading
 	const render = () => {
 		list.replaceChildren();
-		const shown = choices.filter((c) => fuzzy(search.value.trim().toLowerCase(), (c.title || "").toLowerCase()));
+		if (!choices) return list.append(el(doc, "div", "rt-muted", "Loading…"));
+		const shown = choices.filter((c) => fuzzy(search.value.trim().toLowerCase(), c.title.toLowerCase()));
 		if (!shown.length) {
-			list.append(el(doc, "div", "rt-muted", choices.length ? "Nothing matches."
-				: `Nothing read yet — set one from the library instead.`));
+			list.append(el(doc, "div", "rt-muted", choices.length ? "Nothing matches." : "Nothing to choose from."));
 			return;
 		}
 		for (const c of shown.slice(0, 40)) {
 			const row = el(doc, "div", "item");
-			row.append(el(doc, "span", "t", c.title || "(untitled)"), el(doc, "b", null, fmtTotal(c.seconds) || "0m"));
+			row.append(el(doc, "span", "t", c.title));
 			row.addEventListener("click", () => {
 				goalPick = null;
 				startGoal({ libraryID: c.libraryID, scope: wanted, key: c.key, title: c.title });
 			});
 			list.append(row);
 		}
+		// No silent truncation: say what the filter is hiding.
 		if (shown.length > 40) list.append(el(doc, "div", "rt-muted", `+${shown.length - 40} more — keep typing`));
 	};
 	search.addEventListener("input", render);
-	const cancel = el(doc, "button", null, "Cancel");
-	cancel.addEventListener("click", () => { goalPick = null; safe(() => buildHistory(win)); });
-	box.append(search, list, cancel);
 	render();
+
+	const ready = (found) => {
+		choices = found.filter((c) => c.title && !taken.has(c.libraryID + "/" + c.key));
+		choices.sort((a, b) => a.title.localeCompare(b.title));
+		safe(render);
+		safe(() => search.focus());
+	};
+	if (wanted === "collection") {
+		ready(safe(() => Zotero.Collections.getByLibrary(libraryID, true)
+			.map((c) => ({ libraryID: c.libraryID, key: c.key, title: c.name })), []));
+	} else {
+		// Items load asynchronously; the list fills itself in when they arrive.
+		safe(() => Zotero.Items.getAll(libraryID, true).then(
+			(items) => safe(() => ready(items.filter((i) => i.isRegularItem())
+				.map((i) => ({ libraryID: i.libraryID, key: i.key, title: i.getDisplayTitle() })))),
+			oops));
+	}
 	return box;
 }
 
@@ -1769,9 +1805,9 @@ function buildGoals(doc, win) {
 		doc.body.append(el(doc, "div", "day", title));
 		for (const g of list.sort((a, b) => b.seconds - a.seconds)) doc.body.append(goalRow(doc, win, g, now));
 	};
+	pile("All reading", sections.all);   // the one that covers everything comes first
 	pile("Books", sections.item);
 	pile("Collections", sections.collection);
-	pile("All reading", sections.all);
 	pile("Finished", finished);
 }
 
@@ -2045,6 +2081,8 @@ if (typeof module !== "undefined") {
 		start, stop, tick, paint, setPaused, checkOrphaned, buildHistory, openPanel, closePanel,
 		reparentRows, idFor, readerOpenFor, shutdown, log, goals, bars,
 		setView: (v) => { historyView = v; },
+		setPick: (v) => { goalPick = v; },
+		commitGoal,
 		setActive: (v) => { active = v; }, setDB: (v) => { db = v; }, getTimer: () => timer,
 		setRegistered: (col, row) => { columnKey = col; infoRowID = row; },
 	};
