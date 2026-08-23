@@ -83,8 +83,8 @@ starts again on Monday, so there is nothing to finish early.
 
 Marking a book read with **✓** can tag it in Zotero. The first time you do it,
 you're asked what the tag should be — `read` is offered, and leaving it empty
-means no tagging, which is then remembered. The **🏷** button in the Goals tab
-shows the current setting and changes it. Only your click tags anything: a goal
+means no tagging, which is then remembered. The Goals tab says what it does — *Marking read adds
+the tag "read"* — off to the right; click that to change it. Only your click tags anything: a goal
 that reaches its target on its own is never tagged, and **↺** takes the tag off
 again.
 

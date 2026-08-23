@@ -1331,6 +1331,8 @@ h1 { font-size:15px; margin:0 0 12px; }
 .top button.on { background:Highlight; color:HighlightText; }
 .goal { margin:14px 0; }
 .picker { max-height:260px; overflow-y:auto; margin:8px 0; }
+.setting { margin-left:auto; align-self:center; font-size:11px; color:GrayText; cursor:pointer; }
+.setting:hover { text-decoration:underline; color:CanvasText; }
 .goal-head .link { cursor:pointer; }
 .goal-head .link:hover { text-decoration:underline; }
 .goal-head { display:flex; align-items:baseline; gap:8px; }
@@ -1809,15 +1811,19 @@ function buildGoals(doc, win) {
 	};
 	adder("＋ Book", () => { goalPick = "item"; goalDraft = null; buildHistory(win); });
 	adder("＋ Collection", () => { goalPick = "collection"; goalDraft = null; buildHistory(win); });
-	const tag = readTag();
-	adder(tag === undefined ? "🏷 Read tag…" : tag ? `🏷 Tag: ${tag}` : "🏷 No read tag", () => {
-		askReadTag();
-		buildHistory(win);
-	});
 	adder("＋ All reading", () => {
 		goalPick = null;
 		startGoal({ libraryID: Zotero.Libraries.userLibraryID, scope: "all", key: null, title: "All reading" });
 	});
+	// A setting, not a fourth way to add a goal: off to the side, in the quiet
+	// type used for asides elsewhere in this window.
+	const tag = readTag();
+	const setting = el(doc, "span", "setting",
+		tag === undefined ? "🏷 Tag books you mark as read?"
+		: tag ? `🏷 Marking read adds the tag “${tag}”` : "🏷 Marking read adds no tag");
+	setting.title = "Change what marking a book read does";
+	setting.addEventListener("click", () => safe(() => { askReadTag(); buildHistory(win); }));
+	bar.append(setting);
 	doc.body.append(bar);
 
 	if (goalPick) doc.body.append(goalPicker(doc, win));
