@@ -265,11 +265,26 @@ I.log.push({ id: "h1", libraryID: 1, itemKey: "BOOK", title: "A Book", mode: "st
 I.goals.push({ id: "g1", libraryID: 1, scope: "item", key: "BOOK", seconds: 7200, period: "total", updatedAt: Date.now() });
 
 const drawn = (body, cls) => body.children.filter((c) => c.className === cls).length;
+// A library-wide goal has no item or collection to be set from, so the Goals
+// view has to offer it — the scope existed in the schema long before anything
+// could create one.
+global.Zotero.Libraries = { userLibraryID: 1 };
+const goalsDoc = fakeDoc();
+I.setView("goals");
+I.buildHistory({ document: goalsDoc });
+const buttons = [];
+const findButtons = (n) => { if (n.tag === "button") buttons.push(n); (n.children || []).forEach(findButtons); };
+goalsDoc.body.children.forEach(findButtons);
+assert.ok(buttons.some((b) => /all reading/i.test(b.textContent)),
+	"the Goals view offers a goal for everything");
+
 for (const view of ["days", "collections", "goals"]) {
 	const doc = fakeDoc();
-	I.buildHistory({ document: doc, __view: view });
+	I.setView(view);
+	I.buildHistory({ document: doc });
 	assert.ok(doc.body.children.length > 1, `${view} view drew something`);
 }
+I.setView("days");
 
 const doc = fakeDoc();
 I.buildHistory({ document: doc });

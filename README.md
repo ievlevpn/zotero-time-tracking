@@ -62,9 +62,9 @@ collections change, sessions don't.
 ## Goals
 
 Set one on the book you're reading straight from the reader popup — **🎯 Set a
-goal…**, or click an existing goal's bar to change it. For collections and
-library-wide goals, right-click in the library → **Set reading goal…**, or open
-the **Goals** tab in the history window. A goal is a target plus a period:
+goal…**, or click an existing goal's bar to change it. For a collection,
+right-click it in the library → **Set reading goal…**. For everything you read,
+open the **Goals** tab in the history window and use **＋ Goal for all reading**. A goal is a target plus a period:
 
 - `20h` **once** (the default), optionally by a date — the window then shows the pace
   you'd need (`38m a day to finish by 30 Sep`);

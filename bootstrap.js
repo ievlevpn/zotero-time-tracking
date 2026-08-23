@@ -1567,6 +1567,7 @@ function startGoal(target) {
 		? Object.assign({}, existing[0], { title: target.title })
 		: Object.assign({ seconds: 3600, period: "total", deadline: null }, target);
 	historyView = "goals";
+	if (historyWin && !historyWin.closed) return safe(() => buildHistory(historyWin));
 	openHistory(null);
 }
 
@@ -1617,6 +1618,17 @@ function goalEditor(doc, win) {
 }
 
 function buildGoals(doc, win) {
+	// A goal for everything you read. Item and collection goals are set from the
+	// library, where the thing they are about is in front of you; this one has no
+	// such place, so it lives here.
+	const wide = el(doc, "div", "editor-line");
+	const add = el(doc, "button", null, "＋ Goal for all reading");
+	add.addEventListener("click", () => safe(() => startGoal({
+		libraryID: Zotero.Libraries.userLibraryID, scope: "all", key: null, title: "All reading",
+	})));
+	wide.append(add);
+	doc.body.append(wide);
+
 	if (goalDraft) doc.body.append(goalEditor(doc, win));
 
 	const now = Date.now();
@@ -1625,7 +1637,8 @@ function buildGoals(doc, win) {
 
 	if (!rows.length) {
 		doc.body.append(el(doc, "div", "empty",
-			"No goals yet. Right-click a book or a collection in your library → Set reading goal…"));
+			"No goals yet. Right-click a book or a collection in your library → Set reading goal…, "
+			+ "or set one for everything above."));
 		return;
 	}
 
@@ -1942,6 +1955,7 @@ if (typeof module !== "undefined") {
 	module.exports.__internals = {
 		start, stop, tick, paint, setPaused, checkOrphaned, buildHistory, openPanel, closePanel,
 		reparentRows, idFor, readerOpenFor, shutdown, log, goals, bars,
+		setView: (v) => { historyView = v; },
 		setActive: (v) => { active = v; }, setDB: (v) => { db = v; }, getTimer: () => timer,
 		setRegistered: (col, row) => { columnKey = col; infoRowID = row; },
 	};
