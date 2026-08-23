@@ -1295,6 +1295,7 @@ h1 { font-size:15px; margin:0 0 12px; }
 .nav { display:flex; gap:4px; }
 .top button.on { background:Highlight; color:HighlightText; }
 .goal { margin:14px 0; }
+.picker { max-height:260px; overflow-y:auto; margin:8px 0; }
 .goal-head { display:flex; align-items:baseline; gap:8px; }
 .goal-head .t { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
 .goal-head button { font:11px sans-serif; padding:0 5px; border:1px solid transparent; border-radius:4px;
@@ -1358,6 +1359,7 @@ body { --l0:#ebedf0; --l1:#9be9a8; --l2:#40c463; --l3:#30a14e; --l4:#216e39; }
 let historyWin = null;
 let historyView = "days";   // "days" | "collections" | "goals"
 let goalDraft = null;       // the goal being edited, or a target waiting for one
+let goalPick = null;        // "item" | "collection" while choosing what a new goal is about
 let historyFilter = null;   // { title, match(row) } — one item, one collection, or null
 
 const inFilter = (r) => !historyFilter || historyFilter.match(r);
@@ -1567,6 +1569,7 @@ function startGoal(target) {
 		? Object.assign({}, existing[0], { title: target.title })
 		: Object.assign({ seconds: 3600, period: "total", deadline: null }, target);
 	historyView = "goals";
+	goalPick = null;
 	if (historyWin && !historyWin.closed) return safe(() => buildHistory(historyWin));
 	openHistory(null);
 }
@@ -1617,73 +1620,159 @@ function goalEditor(doc, win) {
 	return box;
 }
 
-function buildGoals(doc, win) {
-	// A goal for everything you read. Item and collection goals are set from the
-	// library, where the thing they are about is in front of you; this one has no
-	// such place, so it lives here.
-	const wide = el(doc, "div", "editor-line");
-	const add = el(doc, "button", null, "＋ Goal for all reading");
-	add.addEventListener("click", () => safe(() => startGoal({
-		libraryID: Zotero.Libraries.userLibraryID, scope: "all", key: null, title: "All reading",
-	})));
-	wide.append(add);
-	doc.body.append(wide);
+// Which pile a goal belongs in. A one-off that is done is finished, whether you
+// marked it read or simply reached the time; a recurring one never is, because
+// it starts again.
+function goalDone(g, done) {
+	return g.period === "total" && (!!g.completedAt || done >= g.seconds);
+}
 
-	if (goalDraft) doc.body.append(goalEditor(doc, win));
+function goalRow(doc, win, g, now) {
+	const matches = goalMatcher(g);
+	const name = goalTitle(g);
+	const { done, ratio, complete } = matches ? goalProgress(log, g, matches, now) : { done: 0, ratio: 0 };
+
+	const box = el(doc, "div", "goal");
+	const head = el(doc, "div", "goal-head");
+	head.append(el(doc, "span", "t", name || "(deleted)"),
+		el(doc, "span", "rt-muted", `${fmtTotal(g.seconds)} ${periodLabel[g.period]}`),
+		el(doc, "b", null, `${fmtTotal(done) || "0m"} / ${fmtTotal(g.seconds)}`));
+
+	if (canComplete(g)) {
+		const mark = el(doc, "button", null, g.completedAt ? "↺" : "✓");
+		mark.title = g.completedAt ? "Not finished after all — reopen this goal"
+			: "Mark as read — finished early";
+		mark.addEventListener("click", () => { toggleComplete(g); safe(() => buildHistory(win)); });
+		head.append(mark);
+	}
+	const edit = el(doc, "button", null, "✎");
+	edit.title = "Change this goal";
+	edit.addEventListener("click", () => { goalDraft = Object.assign({}, g, { title: name }); safe(() => buildHistory(win)); });
+	const del = el(doc, "button", null, "✕");
+	del.title = "Delete this goal";
+	del.addEventListener("click", () => { dropGoal(g); safe(() => buildHistory(win)); });
+	head.append(edit, del);
+	box.append(head);
+
+	const bar = el(doc, "div", "bar");
+	const fill = el(doc, "i");
+	fill.style.width = Math.round(ratio * 100) + "%";
+	if (ratio >= 1 || complete) fill.className = "done";
+	bar.append(fill);
+	box.append(bar);
+
+	const pace = matches && goalPace(g, done, now);
+	const foot = !matches ? "The item or collection this goal was set on is gone."
+		: g.completedAt ? `Marked read ${new Date(g.completedAt).toLocaleDateString()} · ${fmtTotal(done) || "0m"} of ${fmtTotal(g.seconds)}`
+		: pace ? `${fmtTotal(pace.perDay)} a day to finish by ${new Date(g.deadline).toLocaleDateString()}`
+		: ratio >= 1 ? "Done ✓" : `${fmtTotal(g.seconds - done)} to go`;
+	box.append(el(doc, "div", "rt-muted", foot));
+	return box;
+}
+
+// Pick what a new goal is about, from what you have actually read: a goal on a
+// book you have never opened is a wish, and the library is where those are made.
+function goalPicker(doc, win) {
+	const wanted = goalPick;
+	const taken = new Set(goals.filter((g) => g.scope === wanted).map((g) => g.libraryID + "/" + g.key));
+	let choices;
+	if (wanted === "collection") {
+		choices = byCollection(log).map((c) => {
+			const collection = safe(() => Zotero.Collections.get(c.id), null);
+			return collection && { libraryID: collection.libraryID, key: collection.key, title: c.name, seconds: c.seconds };
+		}).filter(Boolean);
+	} else {
+		const totals = new Map();
+		for (const r of log) {
+			const id = r.libraryID + "/" + r.itemKey;
+			const at = totals.get(id) || { libraryID: r.libraryID, key: r.itemKey, title: r.title, seconds: 0 };
+			at.seconds += r.seconds;
+			at.title = currentTitle({ libraryID: r.libraryID, itemKey: r.itemKey }) || r.title || at.title;
+			totals.set(id, at);
+		}
+		choices = [...totals.values()].sort((a, b) => b.seconds - a.seconds);
+	}
+	choices = choices.filter((c) => !taken.has(c.libraryID + "/" + c.key));
+
+	const box = el(doc, "div", "editor");
+	box.append(el(doc, "div", "rt-muted",
+		wanted === "collection" ? "Which collection?" : "Which book?"));
+	const search = doc.createElement("input");
+	search.type = "search";
+	search.className = "search";
+	search.placeholder = "Filter…";
+	const list = el(doc, "div", "picker");
+	const render = () => {
+		list.replaceChildren();
+		const shown = choices.filter((c) => fuzzy(search.value.trim().toLowerCase(), (c.title || "").toLowerCase()));
+		if (!shown.length) {
+			list.append(el(doc, "div", "rt-muted", choices.length ? "Nothing matches."
+				: `Nothing read yet — set one from the library instead.`));
+			return;
+		}
+		for (const c of shown.slice(0, 40)) {
+			const row = el(doc, "div", "item");
+			row.append(el(doc, "span", "t", c.title || "(untitled)"), el(doc, "b", null, fmtTotal(c.seconds) || "0m"));
+			row.addEventListener("click", () => {
+				goalPick = null;
+				startGoal({ libraryID: c.libraryID, scope: wanted, key: c.key, title: c.title });
+			});
+			list.append(row);
+		}
+		if (shown.length > 40) list.append(el(doc, "div", "rt-muted", `+${shown.length - 40} more — keep typing`));
+	};
+	search.addEventListener("input", render);
+	const cancel = el(doc, "button", null, "Cancel");
+	cancel.addEventListener("click", () => { goalPick = null; safe(() => buildHistory(win)); });
+	box.append(search, list, cancel);
+	render();
+	return box;
+}
+
+function buildGoals(doc, win) {
+	const bar = el(doc, "div", "editor-line");
+	const adder = (label, fn) => {
+		const b = el(doc, "button", null, label);
+		b.addEventListener("click", () => safe(fn));
+		bar.append(b);
+	};
+	adder("＋ Book", () => { goalPick = "item"; goalDraft = null; buildHistory(win); });
+	adder("＋ Collection", () => { goalPick = "collection"; goalDraft = null; buildHistory(win); });
+	adder("＋ All reading", () => {
+		goalPick = null;
+		startGoal({ libraryID: Zotero.Libraries.userLibraryID, scope: "all", key: null, title: "All reading" });
+	});
+	doc.body.append(bar);
+
+	if (goalPick) doc.body.append(goalPicker(doc, win));
+	else if (goalDraft) doc.body.append(goalEditor(doc, win));
 
 	const now = Date.now();
-	const order = { item: 0, collection: 1, all: 2 };
-	const rows = goals.slice().sort((a, b) => order[a.scope] - order[b.scope] || b.seconds - a.seconds);
-
-	if (!rows.length) {
+	if (!goals.length) {
 		doc.body.append(el(doc, "div", "empty",
-			"No goals yet. Right-click a book or a collection in your library → Set reading goal…, "
-			+ "or set one for everything above."));
+			"No goals yet. Add one above, or right-click a book or collection in your library."));
 		return;
 	}
 
-	for (const g of rows) {
+	// Separate piles, because they answer different questions: what am I working
+	// through, what is a project taking, how much am I reading at all — and what
+	// is already behind me.
+	const finished = [], sections = { item: [], collection: [], all: [] };
+	for (const g of goals) {
 		const matches = goalMatcher(g);
-		const name = goalTitle(g);
-		const { done, ratio, complete } = matches ? goalProgress(log, g, matches, now) : { done: 0, ratio: 0 };
-
-		const box = el(doc, "div", "goal");
-		const head = el(doc, "div", "goal-head");
-		head.append(el(doc, "span", "t", name || "(deleted)"),
-			el(doc, "span", "rt-muted", `${fmtTotal(g.seconds)} ${periodLabel[g.period]}`),
-			el(doc, "b", null, `${fmtTotal(done) || "0m"} / ${fmtTotal(g.seconds)}`));
-
-		if (canComplete(g)) {
-			const mark = el(doc, "button", null, g.completedAt ? "↺" : "✓");
-			mark.title = g.completedAt ? "Not finished after all — reopen this goal"
-				: "Mark as read — finished early";
-			mark.addEventListener("click", () => { toggleComplete(g); safe(() => buildHistory(win)); });
-			head.append(mark);
-		}
-		const edit = el(doc, "button", null, "✎");
-		edit.title = "Change this goal";
-		edit.addEventListener("click", () => { goalDraft = Object.assign({}, g, { title: name }); safe(() => buildHistory(win)); });
-		const del = el(doc, "button", null, "✕");
-		del.title = "Delete this goal";
-		del.addEventListener("click", () => { dropGoal(g); safe(() => buildHistory(win)); });
-		head.append(edit, del);
-		box.append(head);
-
-		const bar = el(doc, "div", "bar");
-		const fill = el(doc, "i");
-		fill.style.width = Math.round(ratio * 100) + "%";
-		if (ratio >= 1 || complete) fill.className = "done";
-		bar.append(fill);
-		box.append(bar);
-
-		const pace = matches && goalPace(g, done, now);
-		const foot = !matches ? "The item or collection this goal was set on is gone."
-			: g.completedAt ? `Marked read ${new Date(g.completedAt).toLocaleDateString()} · ${fmtTotal(done) || "0m"} of ${fmtTotal(g.seconds)}`
-			: pace ? `${fmtTotal(pace.perDay)} a day to finish by ${new Date(g.deadline).toLocaleDateString()}`
-			: ratio >= 1 ? "Done ✓" : `${fmtTotal(g.seconds - done)} to go`;
-		box.append(el(doc, "div", "rt-muted", foot));
-		doc.body.append(box);
+		const { done } = matches ? goalProgress(log, g, matches, now) : { done: 0 };
+		(goalDone(g, done) ? finished : sections[g.scope]).push(g);
 	}
+
+	const pile = (title, list) => {
+		if (!list.length) return;
+		doc.body.append(el(doc, "div", "day", title));
+		for (const g of list.sort((a, b) => b.seconds - a.seconds)) doc.body.append(goalRow(doc, win, g, now));
+	};
+	pile("Books", sections.item);
+	pile("Collections", sections.collection);
+	pile("All reading", sections.all);
+	pile("Finished", finished);
 }
 
 // Its own view rather than a block in the day list: collections answer a
@@ -1949,7 +2038,7 @@ function uninstall() {}
 
 // node-only: lets test.js import the pure helpers; no-op inside Zotero.
 if (typeof module !== "undefined") {
-	module.exports = { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, historyByDay, heatmapWeeks, level, rollUp, fuzzy, periodStart, goalProgress, goalPace, canComplete };
+	module.exports = { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, historyByDay, heatmapWeeks, level, rollUp, fuzzy, periodStart, goalProgress, goalPace, canComplete, goalDone };
 	// Enough of the machinery for test.js to drive a whole session. A smoke test
 	// is what catches an edit that quietly deletes a function everything calls.
 	module.exports.__internals = {

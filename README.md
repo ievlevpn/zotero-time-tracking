@@ -61,10 +61,15 @@ collections change, sessions don't.
 
 ## Goals
 
-Set one on the book you're reading straight from the reader popup — **🎯 Set a
-goal…**, or click an existing goal's bar to change it. For a collection,
-right-click it in the library → **Set reading goal…**. For everything you read,
-open the **Goals** tab in the history window and use **＋ Goal for all reading**. A goal is a target plus a period:
+The **Goals** tab adds them: **＋ Book** and **＋ Collection** offer what you've
+actually read, filtered as you type, and **＋ All reading** covers the library.
+You can also set one on the book in front of you from the reader popup — **🎯
+Set a goal…**, or by clicking an existing goal's bar — or right-click any book
+or collection in the library → **Set reading goal…**.
+
+Goals are filed by what they're about — **Books**, **Collections**, **All
+reading** — with **Finished** last: a one-off goal leaves the pile once it's
+marked read or the time is in. Recurring goals never do, since they start again. A goal is a target plus a period:
 
 - `20h` **once** (the default), optionally by a date — the window then shows the pace
   you'd need (`38m a day to finish by 30 Sep`);

@@ -1,6 +1,6 @@
 // Self-check for the pure helpers and the machinery: `node test.js`.
 const assert = require("assert");
-const { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, historyByDay, heatmapWeeks, level, rollUp, fuzzy, periodStart, goalProgress, goalPace, canComplete } = require("./bootstrap.js");
+const { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, historyByDay, heatmapWeeks, level, rollUp, fuzzy, periodStart, goalProgress, goalPace, canComplete, goalDone } = require("./bootstrap.js");
 
 // A bare number means minutes; h/m/s are honoured; junk is ignored.
 assert.strictEqual(parseDuration("25"), 1500);
@@ -157,6 +157,13 @@ assert.strictEqual(goalPace(marked, 6000, noon), null, "a finished goal needs no
 assert.ok(canComplete({ period: "total" }));
 assert.ok(!canComplete({ period: "week" }), "a recurring goal has nothing to finish");
 
+// Which pile a goal belongs in: a one-off is finished when marked read or when
+// the time is in; a recurring one never is, because it starts again.
+assert.ok(goalDone({ period: "total", seconds: 3600 }, 3600));
+assert.ok(goalDone({ period: "total", seconds: 3600, completedAt: 1 }, 60), "marked read counts");
+assert.ok(!goalDone({ period: "total", seconds: 3600 }, 3599));
+assert.ok(!goalDone({ period: "week", seconds: 3600 }, 99999), "a weekly goal is never behind you");
+
 // Pace: only for a dated total that is still short.
 const dated = { seconds: 7200, period: "total", deadline: today + 3 * DAY };
 assert.strictEqual(goalPace(dated, 3600, noon).days, 4);           // today counts
@@ -275,8 +282,25 @@ I.buildHistory({ document: goalsDoc });
 const buttons = [];
 const findButtons = (n) => { if (n.tag === "button") buttons.push(n); (n.children || []).forEach(findButtons); };
 goalsDoc.body.children.forEach(findButtons);
-assert.ok(buttons.some((b) => /all reading/i.test(b.textContent)),
-	"the Goals view offers a goal for everything");
+for (const label of [/book/i, /collection/i, /all reading/i]) {
+	assert.ok(buttons.some((b) => label.test(b.textContent)),
+		`the Goals view offers ${label} goals`);
+}
+
+// Goals are filed by what they are about, with finished ones out of the way.
+I.goals.length = 0;
+I.goals.push(
+	{ id: "s1", libraryID: 1, scope: "item", key: "BOOK", seconds: 7200, period: "total", updatedAt: 1 },
+	{ id: "s2", libraryID: 1, scope: "collection", key: "COLL", seconds: 10800, period: "week", updatedAt: 1 },
+	{ id: "s3", libraryID: 1, scope: "all", key: null, seconds: 3600, period: "day", updatedAt: 1 },
+	{ id: "s4", libraryID: 1, scope: "item", key: "DONE", seconds: 3600, period: "total", completedAt: Date.now(), updatedAt: 1 });
+const piles = fakeDoc();
+I.setView("goals");
+I.buildHistory({ document: piles });
+const headers = piles.body.children.filter((c) => c.className === "day").map((c) => c.textContent);
+assert.deepStrictEqual(headers, ["Books", "Collections", "All reading", "Finished"],
+	"one pile per kind, finished last");
+I.goals.length = 0;
 
 for (const view of ["days", "collections", "goals"]) {
 	const doc = fakeDoc();
