@@ -19,6 +19,9 @@
 const FOCUS_MIN = 25;     // default, before the pref is read
 const BREAK_MIN = 5;
 const FOCUS_PREF = "readingTime.focusMin";
+// Three states on purpose: undefined = never asked, "" = asked and declined,
+// anything else = the tag to apply.
+const TAG_PREF = "readingTime.readTag";
 const FOCUS_RANGE = [5, 120];
 
 const CHECK_IN = 3600;    // seconds of counted time between "still reading?" prompts
@@ -1141,8 +1144,40 @@ const periodLabel = { total: "once", day: "per day", week: "per week", month: "p
 const canComplete = (g) => g.period === "total";
 
 function toggleComplete(g) {
-	g.completedAt = g.completedAt ? null : Date.now();
+	const marking = !g.completedAt;
+	g.completedAt = marking ? Date.now() : null;
 	saveGoal(g);
+	if (g.scope === "item") applyReadTag(g, marking);
+}
+
+const readTag = () => safe(() => Zotero.Prefs.get(TAG_PREF), undefined);
+
+// Asked once, the first time you mark something read, and changeable from the
+// Goals view afterwards. Cancelling is taken as "no tag" so it isn't asked
+// again on every book — the setting is right there to change.
+function askReadTag() {
+	const current = readTag();
+	const answer = promptValue(
+		"Tag items you mark as read?\n\nEnter a tag name, or leave it empty for none.",
+		current === undefined ? "read" : current);
+	const tag = answer === null ? (current || "") : answer.trim();
+	safe(() => Zotero.Prefs.set(TAG_PREF, tag));
+	return tag;
+}
+
+// Only ever from a click on ✓ or ↺: nothing tags an item on its own, however
+// much time it has had.
+function applyReadTag(g, marking) {
+	const tag = readTag() === undefined ? askReadTag() : readTag();
+	if (!tag) return;
+	safe(() => {
+		const item = Zotero.Items.getByLibraryAndKey(g.libraryID, g.key);
+		if (!item) return;
+		if (marking === item.hasTag(tag)) return;      // already how it should be
+		if (marking) item.addTag(tag);
+		else item.removeTag(tag);
+		item.saveTx();
+	});
 }
 
 // The sessions a goal counts. Resolved when asked, never stored: collection
@@ -1774,6 +1809,11 @@ function buildGoals(doc, win) {
 	};
 	adder("＋ Book", () => { goalPick = "item"; goalDraft = null; buildHistory(win); });
 	adder("＋ Collection", () => { goalPick = "collection"; goalDraft = null; buildHistory(win); });
+	const tag = readTag();
+	adder(tag === undefined ? "🏷 Read tag…" : tag ? `🏷 Tag: ${tag}` : "🏷 No read tag", () => {
+		askReadTag();
+		buildHistory(win);
+	});
 	adder("＋ All reading", () => {
 		goalPick = null;
 		startGoal({ libraryID: Zotero.Libraries.userLibraryID, scope: "all", key: null, title: "All reading" });
@@ -2082,7 +2122,7 @@ if (typeof module !== "undefined") {
 		reparentRows, idFor, readerOpenFor, shutdown, log, goals, bars,
 		setView: (v) => { historyView = v; },
 		setPick: (v) => { goalPick = v; },
-		commitGoal,
+		commitGoal, toggleComplete, applyReadTag, checkGoals,
 		setActive: (v) => { active = v; }, setDB: (v) => { db = v; }, getTimer: () => timer,
 		setRegistered: (col, row) => { columnKey = col; infoRowID = row; },
 	};

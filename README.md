@@ -81,6 +81,13 @@ real figure (`Marked read 21/08 · 8h 40m of 15h`) rather than pretending you
 spent the hours. **↺** reopens it. Recurring goals have no ✓: a weekly target
 starts again on Monday, so there is nothing to finish early.
 
+Marking a book read with **✓** can tag it in Zotero. The first time you do it,
+you're asked what the tag should be — `read` is offered, and leaving it empty
+means no tagging, which is then remembered. The **🏷** button in the Goals tab
+shows the current setting and changes it. Only your click tags anything: a goal
+that reaches its target on its own is never tagged, and **↺** takes the tag off
+again.
+
 A goal's title is a link: it selects that book or collection in the library.
 There is only ever one *all reading* goal — a second would be a competing
 answer to the same question, so setting one replaces it.
