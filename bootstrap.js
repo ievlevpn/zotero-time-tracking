@@ -1375,8 +1375,8 @@ h1 { font-size:15px; margin:0 0 12px; }
 .session .act { display:flex; gap:4px; align-items:center; }
 .snote { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 	color:CanvasText; cursor:text; }
-.snote.empty { color:GrayText; opacity:0; }
-.session:hover .snote.empty { opacity:1; }
+.snote-blank { color:GrayText; opacity:0; }
+.session:hover .snote-blank { opacity:1; }
 .snote-input { flex:1; min-width:0; padding:1px 5px; font:11px sans-serif;
 	background:Canvas; color:CanvasText; border:1px solid GrayText; border-radius:4px; }
 
@@ -1528,7 +1528,7 @@ function sessionRow(doc, win, r) {
 	const note = el(doc, "div", "snote");
 	const show = () => {
 		note.textContent = r.note || "Add a note…";
-		note.className = r.note ? "snote" : "snote empty";
+		note.className = r.note ? "snote" : "snote snote-blank";
 	};
 	const edit = () => {
 		const input = doc.createElement("input");

@@ -322,7 +322,7 @@ const walk = (n) => { if ((n.className || "").startsWith("snote")) notes.push(n)
 doc.body.children.forEach(walk);
 assert.strictEqual(notes.length, 2, "every session has a note line");
 assert.ok(notes.some((n) => n.textContent.includes("coinage")), "the written note is shown");
-assert.ok(notes.some((n) => n.className.includes("empty")), "an unwritten one is an invitation, not a blank");
+assert.ok(notes.some((n) => n.className.includes("snote-blank")), "an unwritten one is an invitation, not a blank");
 
 // --- the note field belongs to the running session -------------------------
 // Clicking outside closes the panel on pointerdown, which removes the focused
