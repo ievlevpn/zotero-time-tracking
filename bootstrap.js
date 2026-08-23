@@ -1370,13 +1370,14 @@ h1 { font-size:15px; margin:0 0 12px; }
 .sessions { margin:0 0 4px 18px; }
 .session { display:flex; align-items:baseline; gap:8px; padding:2px 4px; font-size:12px; color:GrayText; }
 .session .when { font-variant-numeric:tabular-nums; }
-.session .mode { flex:1; min-width:0; }
+.session .mode { color:GrayText; }
 .session b { color:CanvasText; font-variant-numeric:tabular-nums; }
 .session .act { display:flex; gap:4px; align-items:center; }
-.snote { font-size:11px; color:CanvasText; padding:0 4px 3px 54px; cursor:text; overflow-wrap:anywhere; }
+.snote { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+	color:CanvasText; cursor:text; }
 .snote.empty { color:GrayText; opacity:0; }
-.session-wrap:hover .snote.empty { opacity:1; }
-.snote-input { width:calc(100% - 58px); margin:0 4px 3px 54px; padding:2px 5px; font:11px sans-serif;
+.session:hover .snote.empty { opacity:1; }
+.snote-input { flex:1; min-width:0; padding:1px 5px; font:11px sans-serif;
 	background:Canvas; color:CanvasText; border:1px solid GrayText; border-radius:4px; }
 
 /* heatmap */
@@ -1503,13 +1504,11 @@ function heatmapEls(doc, rows) {
 // One logged session: when it started, how it was tracked, how long — and the
 // two things you can do to it. Editing writes an absolute duration; 0 deletes.
 function sessionRow(doc, win, r) {
-	const wrap = el(doc, "div", "session-wrap");
 	const line = el(doc, "div", "session");
 	const live = !!(timer && timer.row === r);
 	line.append(
 		el(doc, "span", "when", new Date(r.started).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })),
-		el(doc, "span", "mode", r.mode),
-		el(doc, "b", null, live ? "running" : (fmtTotal(r.seconds) || "0s")));
+		el(doc, "span", "mode", r.mode));
 
 	const act = el(doc, "span", "act");
 	if (live) {
@@ -1523,10 +1522,8 @@ function sessionRow(doc, win, r) {
 		del.addEventListener("click", (e) => { e.stopPropagation(); deleteSession(win, r); });
 		act.append(edit, del);
 	}
-	line.append(act);
-	line.addEventListener("click", (e) => e.stopPropagation());  // don't collapse the list
-
-	// The note lives under its session and is edited where it sits — no dialog
+	// The note shares the session's line — most sessions have none, and a blank
+	// row each would be all the eye saw. It is edited where it sits, no dialog
 	// for one line of text.
 	const note = el(doc, "div", "snote");
 	const show = () => {
@@ -1559,8 +1556,9 @@ function sessionRow(doc, win, r) {
 	note.addEventListener("click", (e) => { e.stopPropagation(); edit(); });
 	show();
 
-	wrap.append(line, note);
-	return wrap;
+	line.append(note, el(doc, "b", null, live ? "running" : (fmtTotal(r.seconds) || "0s")), act);
+	line.addEventListener("click", (e) => e.stopPropagation());  // don't collapse the list
+	return line;
 }
 
 function editSession(win, r) {
