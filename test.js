@@ -475,6 +475,31 @@ assert.strictEqual(I.goals[0].completedAt, undefined, "and is not marked read");
 I.goals.length = 0;
 I.log.length = 0;
 
+// Only a book can be marked "read": finishing a collection or an all-reading
+// goal tags nothing and doesn't even ask, since there is no one item it means.
+prefs = {}; asked = 0;
+let lookups = 0;
+const realLookup = global.Zotero.Items.getByLibraryAndKey;
+global.Zotero.Items.getByLibraryAndKey = (...args) => { lookups++; return realLookup(...args); };
+global.Services.prompt.prompt = (win, title, text, out) => { asked++; out.value = "read"; return true; };
+
+for (const wide of [
+	{ id: "w1", libraryID: 1, scope: "collection", key: "COLL", seconds: 3600, period: "total", updatedAt: 1 },
+	{ id: "w2", libraryID: 1, scope: "all", key: null, seconds: 3600, period: "total", updatedAt: 1 },
+]) {
+	I.goals.length = 0;
+	I.goals.push(wide);
+	I.toggleComplete(wide);
+	assert.ok(wide.completedAt, `a ${wide.scope} goal can still be marked finished`);
+	assert.deepStrictEqual(tagged, [], `finishing a ${wide.scope} goal tags nothing`);
+	assert.strictEqual(asked, 0, `a ${wide.scope} goal never asks about a tag`);
+	assert.strictEqual(lookups, 0, `a ${wide.scope} goal looks up no item at all`);
+	I.toggleComplete(wide);
+	assert.deepStrictEqual(tagged, [], `reopening a ${wide.scope} goal touches nothing either`);
+}
+global.Zotero.Items.getByLibraryAndKey = realLookup;
+I.goals.length = 0;
+
 // --- what happens when things go sideways ---------------------------------
 const book2 = { id: 2, libraryID: 1, key: "BOOK2", isRegularItem: () => true,
 	getDisplayTitle: () => "Another Book", getCollections: () => [] };
