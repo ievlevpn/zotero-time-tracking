@@ -393,6 +393,27 @@ I.reparentRows((lib, key) => key === "PDF2" ? { libraryID: 1, key: "PARENT", tit
 assert.strictEqual(I.goals.length, 1, "the duplicate goal is dropped, not merged into a conflict");
 assert.strictEqual(I.goals[0].seconds, 3600, "and the one already on the parent survives");
 
+// A session outlives its item. Trashing closes the reader (Zotero does that),
+// which stops the timer through the orphan check; emptying the trash later
+// leaves rows pointing at a key nothing resolves. They keep the title they were
+// logged with rather than becoming "(untitled)".
+const goneDoc = fakeDoc();
+const resolvable = global.Zotero.Items.getByLibraryAndKey;
+global.Zotero.Items.getByLibraryAndKey = () => false;
+global.Zotero.Items.getIDFromLibraryAndKey = () => 0;
+I.log.length = 0;
+I.log.push({ id: "g1", libraryID: 1, itemKey: "GONE", title: "A Book That Was Deleted",
+	mode: "stopwatch", started: Date.now() - 3600e3, seconds: 1200, note: null });
+I.setView("days");
+I.buildHistory({ document: goneDoc });
+const titles = [];
+const walkTitles = (n) => { if (n.className === "t") titles.push(n.textContent); (n.children || []).forEach(walkTitles); };
+goneDoc.body.children.forEach(walkTitles);
+assert.deepStrictEqual(titles, ["A Book That Was Deleted"], "the time survives the item");
+global.Zotero.Items.getByLibraryAndKey = resolvable;
+global.Zotero.Items.getIDFromLibraryAndKey = () => 1;
+I.log.length = 0;
+
 // --- several attachments, one item -----------------------------------------
 // A book's PDF and its appendix are the same reading. itemOf() resolves every
 // attachment to its parent before anything is recorded, so both readers key to
