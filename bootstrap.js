@@ -28,6 +28,7 @@ const CHECK_IN = 3600;    // seconds of counted time between "still reading?" pr
 const FLUSH_EVERY = 60;   // seconds between DB writes while a timer runs
 const ORPHAN_EVERY = 5;   // seconds between "is the book still open?" checks
 const MAX_STEP = 5;       // seconds; longer gaps mean the machine slept
+const MIN_SESSION = 60;   // seconds; anything shorter is a misclick, not reading
 const DAY = 86400000;
 
 let active = false;       // between startup() and shutdown()
@@ -417,8 +418,10 @@ function stop(discard) {
 	if (!timer) return;
 	safe(() => panel && panel.flush());   // typed text belongs to the session it was typed during
 	absorb();
-	// A started-and-immediately-stopped timer isn't history worth keeping.
-	if (discard || timer.row.seconds < 1) dropRow(timer.row);
+	// A minute of reading is the floor: shorter is a misclick or a glance, and
+	// keeping those turns the history into noise. A note is the exception —
+	// someone typed it, so the session was worth something to them.
+	if (discard || (timer.row.seconds < MIN_SESSION && !timer.row.note)) dropRow(timer.row);
 	else saveRow(timer.row);
 	timer = null;
 	paint();

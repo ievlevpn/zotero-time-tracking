@@ -568,7 +568,7 @@ assert.strictEqual(I.log.length, 2, "one row each");
 
 // (3) A crash loses at most the flush interval: the row is rewritten every
 // FLUSH_EVERY ticks, so what survives is the last flush rather than nothing.
-I.getTimer().counted = 30;
+I.getTimer().counted = 120;
 written.length = 0;
 for (let i = 0; i < 60; i++) I.tick();
 assert.ok(written.includes("UPDATE"), "a running session is written to disk about once a minute");
@@ -583,5 +583,25 @@ I.setDB({ queryAsync: () => Promise.resolve([]), closeDatabase: () => Promise.re
 I.shutdown().catch((e) => { throw e; });   // stops and saves before its first await
 assert.strictEqual(I.getTimer(), null, "no timer survives the upgrade");
 assert.ok(running.seconds > 0, "its time was saved on the way out");
+
+// (5) Under a minute is a misclick, not reading — dropped rather than filed.
+// Unless something was typed against it: that text is someone's, not noise.
+I.setDB({ queryAsync: () => Promise.resolve([]) });
+I.log.length = 0;
+I.start("stopwatch", book2);
+I.getTimer().counted = 45;
+I.stop();
+assert.strictEqual(I.log.length, 0, "a 45-second session is not kept");
+
+I.start("stopwatch", book2);
+I.getTimer().counted = 45;
+I.getTimer().row.note = "the epigraph";
+I.stop();
+assert.strictEqual(I.log.length, 1, "but one with a note is");
+
+I.start("stopwatch", book2);
+I.getTimer().counted = 60;
+I.stop();
+assert.strictEqual(I.log.length, 2, "and a full minute is kept on its own");
 
 console.log("ok");
