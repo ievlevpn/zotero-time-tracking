@@ -407,6 +407,7 @@ function start(mode, item) {
 }
 
 function setPaused(paused) {
+	if (!timer) return;   // stopped between the paint that drew the button and the click
 	absorb();
 	timer.running = !paused;
 	timer.segStart = Date.now();
@@ -430,6 +431,7 @@ function stop(discard) {
 }
 
 function nextPhase(auto) {
+	if (!timer) return;
 	absorb();
 	timer.phase = timer.phase === "focus" ? "break" : "focus";
 	timer.phaseElapsed = 0;
@@ -798,9 +800,14 @@ function closePanel() {
 }
 
 function openPanel(reader, doc, btn) {
-	// Sweep anything an earlier open may have left behind. A stray box would sit
-	// there forever: unclosable, because closePanel() bails when `panel` is null,
-	// and frozen, because paint() only refreshes what `panel` points at.
+	// One panel, one slot. Reassigning `panel` over a live one would leave that
+	// one on screen for good — unclosable, because closePanel() only ever acts
+	// on what `panel` points at, and frozen, for the same reason. Enforced here
+	// rather than trusted to every caller: the corner clock is opened from the
+	// 1 Hz pass, which has no idea what else might be up.
+	closePanel();
+	// And sweep anything an earlier open left behind in this document — a stray
+	// box has the same two problems and nothing else would ever remove it.
 	for (const stray of doc.querySelectorAll(".rt-panel")) stray.remove();
 
 	const box = el(doc, "div", btn.corner ? "rt-panel rt-corner" : "rt-panel");
@@ -848,8 +855,11 @@ function onTimedTab(win) {
 // The tab the timer is on, if it is still open — the folded line's title takes
 // you back to it, and to the library copy when nothing is open any more.
 function backToTimed(win, item) {
-	const view = openViews().find((v) => safe(() => idFor(v), null) === timer.id);
-	if (view && view.tabID) return safe(() => win.Zotero_Tabs.select(view.tabID));
+	// A tab to go to, if there is one — a note open in its own window has no
+	// tabID, and picking that would take you nowhere.
+	const view = !timer ? null
+		: openViews().find((v) => v.tabID && safe(() => idFor(v), null) === timer.id);
+	if (view) return safe(() => win.Zotero_Tabs.select(view.tabID));
 	safe(() => win.ZoteroPane.selectItem(item.id));
 }
 
@@ -857,6 +867,9 @@ function autoMini() {
 	const win = Zotero.getMainWindow();
 	const want = !!win && !!timer && miniDismissed !== timer.row && !onTimedTab(win);
 	const have = !!panel && panel.btn === mainAnchor;
+	// A popup someone actually asked for outranks this one: it gets the slot
+	// until it is closed, and the clock comes back after.
+	if (panel && !have) return;
 	if (want === have) return;
 	if (!want) return closePanel();
 	// Not in the cache this instant — routine while tabs settle. Next second.
@@ -2339,7 +2352,7 @@ if (typeof module !== "undefined") {
 	// Enough of the machinery for test.js to drive a whole session. A smoke test
 	// is what catches an edit that quietly deletes a function everything calls.
 	module.exports.__internals = {
-		start, stop, tick, paint, setPaused, checkOrphaned, buildHistory, openPanel, closePanel,
+		start, stop, tick, paint, setPaused, nextPhase, checkOrphaned, buildHistory, openPanel, closePanel,
 		reparentRows, idFor, readerOpenFor, adoptOpenNotes, shutdown, log, goals, bars,
 		setView: (v) => { historyView = v; },
 		setPick: (v) => { goalPick = v; },

@@ -705,6 +705,25 @@ I.stop();
 I.start("stopwatch", book);
 I.autoMini();
 assert.strictEqual(mini().length, 1, "but the next session shows it again");
+
+// A popup someone actually asked for outranks the corner clock. Taking the one
+// panel slot from under it would leave it on screen, unclosable and frozen.
+const readerDoc = fakeDoc();
+const readerBtn = node("button");
+readerBtn.getBoundingClientRect = () => ({ bottom: 20, left: 10 });
+I.openPanel({ itemID: 40 }, readerDoc, readerBtn);
+assert.strictEqual(mini().length, 0, "opening a reader popup closes the corner clock");
+I.autoMini();
+assert.strictEqual(readerDoc.body.children.filter((c) => (c.className || "").includes("rt-panel")).length, 1,
+	"and the corner clock does not orphan it a second later");
+assert.strictEqual(mini().length, 0, "nor put itself back on top of it");
+I.closePanel();
+I.autoMini();
+assert.strictEqual(mini().length, 1, "it comes back once the popup is gone");
+
+// A click that lands after the timer stopped must not throw out of the handler.
+I.stop();
+assert.doesNotThrow(() => { I.setPaused(true); I.nextPhase(false); }, "no timer, no controls to work");
 I.setFolded(true);
 I.stop();
 I.autoMini();
