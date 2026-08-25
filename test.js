@@ -202,6 +202,7 @@ let openNotes = [];
 let refreshes = 0;
 global.Zotero = {
 	logError: (e) => logged.push(e),   // checked below: only expected ones allowed
+	getMainWindow: () => null,         // no window yet; the corner clock stays away
 	Items: { get: (id) => ({ 10: attach, 1: book }[id] || false) },
 	Reader: { get _readers() { return openReaders; } },
 	Notes: { get _editorInstances() { return openNotes; } },
@@ -642,30 +643,56 @@ I.shutdown().catch((e) => { throw e; });   // stops and saves before its first a
 assert.strictEqual(I.getTimer(), null, "no timer survives the upgrade");
 assert.ok(running.seconds > 0, "its time was saved on the way out");
 
-// (5) The same popup out in the library, where there is no reader toolbar to
-// hang it on. It follows the running timer; with none, the selection.
+// (5) The floating clock: it shows itself while a timer runs and the library is
+// what you are looking at, folds to a line, and stays hidden once dismissed.
 I.setActive(true);                       // shutdown() above turned everything off
 I.setDB({ queryAsync: () => Promise.resolve([]) });
 const mainDoc = fakeDoc();
-const selected = [];
+let tabType = "library";
 global.Zotero.getMainWindow = () => ({ document: mainDoc, focus() {},
-	ZoteroPane: { selectItem() {}, getSelectedItems: () => selected } });
-const panels = () => mainDoc.body.children.filter((c) => (c.className || "").includes("rt-panel"));
+	Zotero_Tabs: { get selectedType() { return tabType; } },
+	ZoteroPane: { selectItem() {} } });
+const mini = () => mainDoc.body.children.filter((c) => (c.className || "").includes("rt-corner"));
+const dig = (n, out = []) => { out.push(n); (n.children || []).forEach((c) => dig(c, out)); return out; };
+const inMini = () => (mini().length ? dig(mini()[0]) : []);
 
-I.toggleMainPanel();
-assert.strictEqual(panels().length, 0, "nothing selected and nothing running opens nothing");
+I.autoMini();
+assert.strictEqual(mini().length, 0, "no timer, no clock");
 
-selected.push(book);
-I.toggleMainPanel();
-assert.strictEqual(panels().length, 1, "the menu item opens the panel over the library");
-const filled = [];
-const dig = (n) => { filled.push(n); (n.children || []).forEach(dig); };
-panels().forEach(dig);
-assert.ok(filled.some((n) => (n.textContent || "").includes("Mark as read")),
-	"and fills it — the whole panel, not just its box");
-I.toggleMainPanel();
-assert.strictEqual(panels().length, 0, "and the same menu item closes it");
-I.closePanel();
+I.start("stopwatch", book);
+I.getTimer().counted = 90;
+I.autoMini();
+assert.strictEqual(mini().length, 1, "a running timer shows itself in the library");
+assert.ok(inMini().some((n) => (n.textContent || "").includes("Book")),
+	"folded, the line carries the title — it is all the context there is");
+assert.ok(!inMini().some((n) => (n.textContent || "").includes("Mark as read")),
+	"and nothing else: folded is one line");
+
+const fold = inMini().find((n) => n.textContent === "▴");
+fold.listeners.click.forEach((fn) => fn());
+assert.ok(inMini().some((n) => (n.textContent || "").includes("Mark as read")),
+	"unfolding gives the whole panel");
+
+tabType = "reader";
+I.autoMini();
+assert.strictEqual(mini().length, 0, "it keeps off a reader tab, which has its own clock");
+tabType = "library";
+I.autoMini();
+assert.strictEqual(mini().length, 1, "and comes back with the library");
+
+inMini().find((n) => n.textContent === "✕").listeners.click.forEach((fn) => fn());
+assert.strictEqual(mini().length, 0, "✕ hides it");
+I.autoMini();
+assert.strictEqual(mini().length, 0, "and it stays hidden for that session");
+
+I.stop();
+I.start("stopwatch", book);
+I.autoMini();
+assert.strictEqual(mini().length, 1, "but the next session shows it again");
+I.setFolded(true);
+I.stop();
+I.autoMini();
+assert.strictEqual(mini().length, 0, "stopping takes it away");
 
 // (6) Under a minute is a misclick, not reading — dropped rather than filed.
 // Unless something was typed against it: that text is someone's, not noise.

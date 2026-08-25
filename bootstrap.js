@@ -610,6 +610,16 @@ const CSS = `
 .rt-panel .rt-pom .rt-muted { flex:1; cursor:pointer; }
 .rt-panel .rt-pom button { flex:0 0 auto; padding:2px 8px; }
 .rt-panel .rt-pom button[hidden] { display:none; }   /* same trap as above */
+/* The floating clock: pinned to the corner rather than hung off a button, and
+   only as wide as it needs to be while folded. */
+.rt-panel.rt-corner { bottom:12px; right:12px; }
+.rt-panel.rt-folded { width:auto; }
+.rt-panel .rt-mini { display:flex; align-items:center; gap:6px; white-space:nowrap; }
+.rt-panel .rt-mini b { flex:1; font-variant-numeric:tabular-nums; overflow:hidden; text-overflow:ellipsis; }
+.rt-panel .rt-mini button { flex:0 0 auto; font:11px/1.6 sans-serif; padding:0 4px; background:none;
+	border:1px solid transparent; border-radius:4px; color:GrayText; cursor:pointer; }
+.rt-panel .rt-mini button:hover { color:CanvasText; border-color:GrayText; }
+.rt-panel:not(.rt-folded) .rt-mini { border-bottom:1px solid GrayText; padding-bottom:6px; margin-bottom:2px; }
 `;
 
 function injectCSS(doc) {
@@ -759,6 +769,7 @@ function paint() {
 		if (!safe(() => paintBar(bar), false)) bars.delete(key);
 	}
 	if (panel) safe(() => { if (panel.el.isConnected) panel.refresh(); else closePanel(); });
+	safe(autoMini);
 }
 
 // --- popup -----------------------------------------------------------------
@@ -790,11 +801,13 @@ function openPanel(reader, doc, btn) {
 	// and frozen, because paint() only refreshes what `panel` points at.
 	for (const stray of doc.querySelectorAll(".rt-panel")) stray.remove();
 
-	const box = el(doc, "div", "rt-panel");
-	const rect = btn.getBoundingClientRect();
-	const vw = (doc.defaultView && doc.defaultView.innerWidth) || 800;
-	box.style.top = rect.bottom + 4 + "px";
-	box.style.left = Math.max(8, Math.min(rect.left, vw - 268)) + "px";
+	const box = el(doc, "div", btn.corner ? "rt-panel rt-corner" : "rt-panel");
+	if (!btn.corner) {
+		const rect = btn.getBoundingClientRect();
+		const vw = (doc.defaultView && doc.defaultView.innerWidth) || 800;
+		box.style.top = rect.bottom + 4 + "px";
+		box.style.left = Math.max(8, Math.min(rect.left, vw - 268)) + "px";
+	}
 	// The main window is a XUL <window>: no <body> to append to, but an HTML div
 	// renders there fine — Zotero's own tab bar is one.
 	(doc.body || doc.documentElement).append(box);
@@ -802,41 +815,59 @@ function openPanel(reader, doc, btn) {
 	// Publish the panel before filling it, so however the rest of this function
 	// goes, what is on screen is always what closePanel() and paint() act on.
 	panel = { el: box, btn, cleanup: () => {}, refresh: () => {}, flush: () => {} };
-	panel.cleanup = watchOutside(reader, doc, box, btn);
+	// The corner panel is not a popup: it shows itself, so a click anywhere else
+	// must not dismiss it — it would only come back a second later.
+	if (!btn.corner) panel.cleanup = watchOutside(reader, doc, box, btn);
 	tryFill(doc, box, reader);
 }
 
-// Nothing to anchor to in the main window — Zotero has no plugin API for a
-// toolbar button there — so the panel hangs under the toolbar at the top right,
-// which openPanel's own clamp works out. One object, not one per call, so the
-// menu item toggles the panel instead of reopening it.
-const mainAnchor = { getBoundingClientRect: () => ({ bottom: 44, left: 1e6 }) };
+// The floating clock, bottom right of the library. A running timer is otherwise
+// invisible the moment you leave the reader tab, so this shows itself — and only
+// there: over a reader or a note tab the clock is already in the toolbar, and a
+// box floating on top of what you're reading would be in the way.
+const mainAnchor = { corner: true, getBoundingClientRect: () => ({ bottom: 0, left: 0 }) };
+let miniFolded = true;      // a line with the time; unfold for the whole panel
+let miniDismissed = null;   // the session ✕ was pressed for
 
-// Which item the main-window panel is about: whatever is being timed, since a
-// running timer being invisible out here is the whole reason for it; failing
-// that, whatever is selected in the library.
-function mainPanelItem() {
-	if (timer) {
-		const cut = timer.id.indexOf("/");
-		const id = safe(() => Zotero.Items.getIDFromLibraryAndKey(
-			Number(timer.id.slice(0, cut)), timer.id.slice(cut + 1)), null);
-		if (id) return id;
-	}
+// Called from paint(), so it settles within a second of anything changing —
+// a timer starting or stopping, or a tab being switched.
+function autoMini() {
 	const win = Zotero.getMainWindow();
-	const sel = win && safe(() => win.ZoteroPane.getSelectedItems(), null);
-	return sel && sel.length ? sel[0].id : null;
+	const inLibrary = !!win && safe(() => win.Zotero_Tabs.selectedType === "library", false);
+	const want = !!timer && inLibrary && miniDismissed !== timer.row;
+	const have = !!panel && panel.btn === mainAnchor;
+	if (want === have) return;
+	if (!want) return closePanel();
+	// Not in the cache this instant — routine while tabs settle. Next second.
+	const itemID = safe(() => Zotero.Items.getIDFromLibraryAndKey(
+		timer.row.libraryID, timer.row.itemKey), null);
+	if (!itemID) return;
+	injectCSS(win.document);
+	openPanel({ itemID }, win.document, mainAnchor);
 }
 
-// The reader popup, out in the library: the same stats, timer controls, goals
-// and manual entry, for the item you're timing or the one you've selected.
-function toggleMainPanel() {
-	const win = Zotero.getMainWindow();
-	if (!win) return;
-	if (panel && panel.btn === mainAnchor) return closePanel();
-	const itemID = mainPanelItem();
-	if (!itemID) return notify("⏱ Select an item to see its reading time");
-	injectCSS(win.document);
-	togglePanel({ itemID }, win.document, mainAnchor);
+// The corner panel's own line: the live time, fold, and hide. Returns its
+// ticker rather than setting panel.refresh, so it can be chained in front of
+// whatever fillPanel sets when the panel is unfolded.
+function miniHead(doc, rebuild) {
+	const head = el(doc, "div", "rt-mini");
+	const live = el(doc, "b");
+	const fold = el(doc, "button", null, miniFolded ? "▴" : "▾");
+	const shut = el(doc, "button", null, "✕");
+	fold.title = miniFolded ? "Show the timer controls" : "Fold to one line";
+	shut.title = "Hide until the next session";
+	fold.addEventListener("click", () => safe(() => { miniFolded = !miniFolded; rebuild(); }));
+	shut.addEventListener("click", () => safe(() => {
+		miniDismissed = timer && timer.row;
+		closePanel();
+	}));
+	head.append(live, fold, shut);
+	// Folded, the line is all the context there is, so it carries the title too.
+	const tick = () => {
+		const what = miniFolded && timer && timer.row.title ? ` · ${timer.row.title}` : "";
+		live.textContent = timer ? liveText() + what : "";
+	};
+	return { el: head, tick };
 }
 
 // The item may not be in Zotero's cache the instant you open the popup on a tab
@@ -853,7 +884,14 @@ function tryFill(doc, box, reader) {
 	box.replaceChildren();
 	panel.refresh = () => {};
 	panel.flush = () => {};
+	const mini = panel.btn === mainAnchor ? miniHead(doc, () => tryFill(doc, box, reader)) : null;
+	if (mini) {
+		box.className = "rt-panel rt-corner" + (miniFolded ? " rt-folded" : "");
+		box.append(mini.el);
+		if (miniFolded) { panel.refresh = mini.tick; return mini.tick(); }
+	}
 	safe(() => fillPanel(doc, box, item, reader));   // sets panel.refresh when it succeeds
+	if (mini) { const inner = panel.refresh; panel.refresh = () => { mini.tick(); inner(); }; }
 	safe(() => panel.refresh());
 }
 
@@ -2171,10 +2209,7 @@ function startup({ id }) {
 		menuID: "reading-time-history",
 		pluginID: id,
 		target: "main/menubar/tools",
-		menus: [
-			{ menuType: "menuitem", l10nID: "reading-time-panel-menu", onCommand: () => safe(toggleMainPanel) },
-			{ menuType: "menuitem", l10nID: "reading-time-history-menu", onCommand: () => openHistory() },
-		],
+		menus: [{ menuType: "menuitem", l10nID: "reading-time-history-menu", onCommand: () => openHistory() }],
 	});
 	collectionMenuID = Zotero.MenuManager.registerMenu({
 		menuID: "reading-time-collection-history",
@@ -2286,7 +2321,8 @@ if (typeof module !== "undefined") {
 		reparentRows, idFor, readerOpenFor, adoptOpenNotes, shutdown, log, goals, bars,
 		setView: (v) => { historyView = v; },
 		setPick: (v) => { goalPick = v; },
-		toggleRead, toggleMainPanel,
+		toggleRead, autoMini,
+		setFolded: (v) => { miniFolded = v; },
 		commitGoal, toggleComplete, applyReadTag, checkGoals,
 		setActive: (v) => { active = v; }, setDB: (v) => { db = v; }, getTimer: () => timer,
 		setRegistered: (col, row) => { columnKey = col; infoRowID = row; },

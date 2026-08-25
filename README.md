@@ -33,10 +33,13 @@ the reading and the note-taking together. A note in the item pane or the
 reader's sidebar gets no button — there the reader's own timer is already
 counting onto the same item.
 
-Away from the reader the same popup is a menu item: **Tools → Reading Timer…**
-opens it over the library, on whatever is being timed — or on the selected item
-when nothing is. A running timer is otherwise invisible the moment you leave the
-reader tab.
+Leave the reader tab with a timer running and the clock follows you: a small box
+in the bottom right of the library, showing the live time and what it's on. It
+appears on its own and needs no menu item — a running timer is otherwise
+invisible out there. **▴** unfolds it into the whole popup (stats, Pause/Stop,
+goals, manual entry), **▾** folds it back, and **✕** hides it until the next
+session starts. It never shows over a reader or note tab, where the clock is
+already in the toolbar.
 
 While a timer runs the live time sits inside the clock button, so you can close
 the popup and keep reading. The popup also shows **This item / Today / Last 7
