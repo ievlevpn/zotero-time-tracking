@@ -1,7 +1,7 @@
 /* Reading Time — a tiny Zotero plugin (bootstrapped, Zotero 10).
  *
- * Adds a clock button to the reader toolbar with a stopwatch, a pomodoro
- * timer and manual time entry.
+ * Adds a clock button to the reader toolbar — and to a note opened in its own
+ * tab or window — with a stopwatch, a pomodoro timer and manual time entry.
  *
  * Storage is the plugin's own `time-tracker.sqlite`, next to zotero.sqlite in
  * the Zotero data directory: one append-only row per reading session, so
@@ -347,7 +347,8 @@ const parentOf = (libraryID, key) => safe(() => {
 	return parent ? { libraryID: parent.libraryID, key: parent.key, title: parent.getDisplayTitle() } : null;
 }, null);
 
-// The reader is attached to an attachment; time belongs on its parent, if any.
+// A view is on an attachment or a note; time belongs on its parent, if any, so
+// an hour of writing about a book lands on the book beside the hour reading it.
 // Zotero.Items.get() throws UnloadedDataException when an id is known but the
 // object isn't in the cache yet — routine while tabs are still settling.
 function itemOf(reader) {
@@ -449,6 +450,7 @@ function pulse() {
 	// thing in shutdown, which stops an old instance from redrawing — or from
 	// putting its own toolbar button back next to the new instance's.
 	if (!active) return;
+	safe(adoptOpenNotes);
 	safe(() => (timer ? tick() : paint()));
 }
 
@@ -507,18 +509,27 @@ function alertPhase() {
 		: `☕ Time for a ${BREAK_MIN} min break`, true);
 }
 
-// Closing the book ends the sitting. A timer whose item has no reader open
+// Notes opened in their own tab or window only. One in the item pane or the
+// reader's sidebar is a glance, not a sitting — and in the sidebar the reader's
+// own timer is already counting the same time onto the same parent item.
+const noteViews = () => ((Zotero.Notes && Zotero.Notes._editorInstances) || [])
+	.filter((e) => e.viewMode === "tab" || e.viewMode === "window");
+
+// Everywhere a timer can be running: a reader tab, or a note in its own tab.
+const openViews = () => [...(Zotero.Reader._readers || []), ...noteViews()];
+
+// Closing the book ends the sitting. A timer whose item has no view open
 // anywhere is counting time nobody is spending, and with its toolbar gone there
 // is nothing on screen to notice it by. Two strikes a few seconds apart, so a
-// reader that is merely mid-initialisation doesn't count as closed.
-// Three answers, not two: open, not open, or "can't tell". A reader whose item
+// view that is merely mid-initialisation doesn't count as closed.
+// Three answers, not two: open, not open, or "can't tell". A view whose item
 // isn't in Zotero's cache right now resolves to null, and counting that as
 // closed would stop a timer on a tab sitting right in front of you — which is
 // easy to hit while switching tabs, since that is when items load and unload.
 function readerOpenFor(id) {
-	const readers = Zotero.Reader._readers || [];
-	if (!readers.length) return false;                    // nothing open anywhere
-	const ids = readers.map((r) => safe(() => idFor(r), null));
+	const views = openViews();
+	if (!views.length) return false;                      // nothing open anywhere
+	const ids = views.map((r) => safe(() => idFor(r), null));
 	if (ids.includes(id)) return true;
 	return ids.some(Boolean) ? false : null;              // none resolved → unknown
 }
@@ -606,6 +617,13 @@ function injectCSS(doc) {
 	if (style.textContent !== CSS) style.textContent = CSS;
 }
 
+// A stray from an older instance: drop the wrapper we put it in, if any, never
+// the toolbar section it sits in directly.
+function dropStray(btn) {
+	const wrap = btn.parentElement;
+	(wrap && wrap.classList.contains("section") ? wrap : btn).remove();
+}
+
 // A toolbar's item, resolved once and kept. Resolving it per tick meant a
 // single Items.get() miss — it throws UnloadedDataException for an id that is
 // known but not in the cache — blanked the live time in both the button and the
@@ -643,10 +661,14 @@ function renderButton(event) {
 
 // Put a button back into a container that still exists but no longer has ours.
 function restoreButton(bar) {
-	const section = el(bar.doc, "div", "section");
 	const { btn, label } = makeButton(bar.doc, bar.reader);
-	section.append(btn);
-	bar.host.append(section);
+	// The reader's container holds sections; the note toolbar holds buttons.
+	if (bar.bare) bar.host.append(btn);
+	else {
+		const section = el(bar.doc, "div", "section");
+		section.append(btn);
+		bar.host.append(section);
+	}
 	bar.btn = btn;
 	bar.label = label;
 }
@@ -659,13 +681,31 @@ function adoptOpenReaders() {
 		const doc = reader._iframeWindow && reader._iframeWindow.document;
 		const host = doc && doc.querySelector(".toolbar .custom-sections");
 		if (!host || bars.has(host)) return;
-		for (const stray of host.querySelectorAll(".rt-btn")) (stray.parentElement || stray).remove();
+		for (const stray of host.querySelectorAll(".rt-btn")) dropStray(stray);
 		injectCSS(doc);
 		const bar = { reader, doc, host, btn: null, label: null, id: idFor(reader) };
 		restoreButton(bar);
 		bars.set(host, bar);
 	});
 	paint();
+}
+
+// Notes get no renderToolbar event — no plugin API for that toolbar at all — so
+// we look for them ourselves. React owns the container and may drop our button
+// on a re-render; the same 1 Hz pass that notices puts it back.
+// ponytail: two querySelectors a second per open note tab. Hook a real event
+// here the day Zotero grows one.
+function adoptOpenNotes() {
+	for (const view of noteViews()) safe(() => {
+		const doc = view._iframeWindow && view._iframeWindow.document;
+		const host = doc && doc.querySelector(".toolbar .end");
+		if (!host || bars.has(host)) return;
+		for (const stray of host.querySelectorAll(".rt-btn")) dropStray(stray);
+		injectCSS(doc);
+		const bar = { reader: view, doc, host, btn: null, label: null, id: idFor(view), bare: true };
+		restoreButton(bar);
+		bars.set(host, bar);
+	});
 }
 
 // One toolbar. Returns false when the bar is finished with, for any reason.
@@ -684,7 +724,7 @@ function paintBar(bar) {
 	// button beside ours. One toolbar, one clock: ours is the one in `bars`.
 	if (bar.host) {
 		for (const other of bar.host.querySelectorAll(".rt-btn")) {
-			if (other !== bar.btn) (other.parentElement || other).remove();
+			if (other !== bar.btn) dropStray(other);
 		}
 	}
 	bar.label.textContent = (timer && bar.id === timer.id) ? liveText() : "";
@@ -2153,7 +2193,7 @@ if (typeof module !== "undefined") {
 	// is what catches an edit that quietly deletes a function everything calls.
 	module.exports.__internals = {
 		start, stop, tick, paint, setPaused, checkOrphaned, buildHistory, openPanel, closePanel,
-		reparentRows, idFor, readerOpenFor, shutdown, log, goals, bars,
+		reparentRows, idFor, readerOpenFor, adoptOpenNotes, shutdown, log, goals, bars,
 		setView: (v) => { historyView = v; },
 		setPick: (v) => { goalPick = v; },
 		toggleRead,

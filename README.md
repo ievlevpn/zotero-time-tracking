@@ -6,8 +6,9 @@ menu API — and is only tested against 10.
 
 ![The history window: totals, a year of reading as a heatmap, and every day's sessions](docs/history.png)
 
-Adds a 🕐 button to the reader toolbar. Click it for a small popup with three
-ways to log time on the item you're reading:
+Adds a 🕐 button to the reader toolbar — and to a note opened in its own tab or
+window, since writing about a book is time spent on it. Click it for a small
+popup with three ways to log time on the item you're reading:
 
 - **⏱ Stopwatch** — counts up until you pause or stop.
 - **🍅 Pomodoro** — clicking it doesn't start anything: the length appears with
@@ -22,6 +23,15 @@ ways to log time on the item you're reading:
 - **A note** — one line about what you read, belonging to the session being
   timed. Stopping saves it and empties the field, so what's on screen is always
   the note for what's running now. Notes sit on their sessions line in the history window, where any of them can still be written or changed later.
+
+A session under a minute isn't saved: a file opened by mistake is not reading,
+and keeping those turns the history into noise. One you wrote a note against is
+kept however short it was.
+
+Time on an attachment or a note lands on its parent item, so a book's total is
+the reading and the note-taking together. A note in the item pane or the
+reader's sidebar gets no button — there the reader's own timer is already
+counting onto the same item.
 
 While a timer runs the live time sits inside the clock button, so you can close
 the popup and keep reading. The popup also shows **This item / Today / Last 7

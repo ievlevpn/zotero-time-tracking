@@ -183,11 +183,13 @@ const attach = { id: 10, libraryID: 1, key: "ATT", parentID: 1 };
 const book = { id: 1, libraryID: 1, key: "BOOK", isRegularItem: () => true, getDisplayTitle: () => "Book" };
 Object.defineProperty(attach, "parentItem", { get() { return global.Zotero.Items.get(this.parentID); } });
 let openReaders = [{ itemID: 10 }];
+let openNotes = [];
 let refreshes = 0;
 global.Zotero = {
 	logError: (e) => logged.push(e),   // checked below: only expected ones allowed
 	Items: { get: (id) => ({ 10: attach, 1: book }[id] || false) },
 	Reader: { get _readers() { return openReaders; } },
+	Notes: { get _editorInstances() { return openNotes; } },
 	Utilities: { randomString: () => "id" + written.length },
 	ItemTreeManager: { refreshColumns: () => refreshes++ },
 	ItemPaneManager: { refreshInfoRow: () => refreshes++ },
@@ -436,6 +438,41 @@ openReaders = [{ itemID: 31 }];                       // one of the two tabs clo
 assert.strictEqual(I.readerOpenFor("1/BOOK"), true, "the other attachment still counts as open");
 openReaders = [];
 assert.strictEqual(I.readerOpenFor("1/BOOK"), false, "the last one closed ends it");
+
+// --- a note is the same item's time ---------------------------------------
+// Writing about a book is time on the book: a note rolls up to its parent just
+// like an attachment does, so both land on the same total.
+const memo = { id: 32, libraryID: 1, key: "NOTE", parentID: 1 };
+Object.defineProperty(memo, "parentItem", { get() { return global.Zotero.Items.get(this.parentID); } });
+shelf[32] = memo;
+assert.strictEqual(I.idFor({ itemID: 32 }), "1/BOOK", "a note counts as its parent");
+
+openNotes = [{ itemID: 32, viewMode: "tab" }];
+assert.strictEqual(I.readerOpenFor("1/BOOK"), true, "a note tab holds the timer open");
+openNotes = [{ itemID: 32, viewMode: "library" }];
+assert.strictEqual(I.readerOpenFor("1/BOOK"), false,
+	"but a note merely selected in the item pane is not a sitting");
+
+// The note toolbar has no plugin API, so the button is put there by hand — and
+// put back when React drops it, which is the only thing keeping it on screen.
+const end = node("div");
+end.className = "end";
+const noteDoc = fakeDoc();
+noteDoc.querySelector = (sel) => (sel === ".toolbar .end" ? end : null);
+openNotes = [{ itemID: 32, viewMode: "tab", _iframeWindow: { document: noteDoc } }];
+I.adoptOpenNotes();
+const clock = () => end.children.filter((c) => (c.className || "").includes("rt-btn"));
+assert.strictEqual(clock().length, 1, "a note tab gets a clock button");
+I.adoptOpenNotes();
+assert.strictEqual(clock().length, 1, "and only ever one");
+
+const dropped = clock()[0];
+end.children = [];                       // React re-rendered the toolbar
+dropped.isConnected = false;
+I.paint();
+assert.strictEqual(clock().length, 1, "a dropped button is put back");
+I.bars.clear();
+openNotes = [];
 
 // --- marking a book read tags it, and stops its timer ---------------------
 // Only ever from a click: nothing tags an item on its own, however much time it
