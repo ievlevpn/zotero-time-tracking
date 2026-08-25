@@ -2051,6 +2051,10 @@ function buildHistory(win) {
 // background — until it lands, `db` is null and every writer bails.
 function startup({ id }) {
 	active = true;
+	// Before any of the registrations below: everything they put on screen is
+	// labelled from the .ftl, and an element added before the file is there
+	// stays blank.
+	for (const win of Zotero.getMainWindows()) safe(() => onMainWindowLoad({ window: win }));
 	focusMin = safe(() => Number(Zotero.Prefs.get(FOCUS_PREF)), 0) || FOCUS_MIN;
 	openDB().catch(oops);
 	onRenderToolbar = renderButton;
@@ -2144,11 +2148,16 @@ function startup({ id }) {
 			}),
 		}],
 	});
-	for (const win of Zotero.getMainWindows()) onMainWindowLoad({ window: win });
 	safe(adoptOpenReaders);
 }
 
+// Zotero tears the plugin l10n source down and builds a new one whenever a
+// plugin is upgraded or disabled, which leaves an already-open window holding
+// empty bundles: the menu items come back with no label at all. Re-inserting
+// alone doesn't fix it — insertFTLIfNeeded finds the link the old version left
+// behind and returns. Drop that link first, so Fluent really re-fetches.
 function onMainWindowLoad({ window }) {
+	for (const link of window.document.querySelectorAll('link[href="reading-time.ftl"]')) link.remove();
 	window.MozXULElement.insertFTLIfNeeded("reading-time.ftl");
 }
 
