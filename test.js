@@ -1,6 +1,6 @@
 // Self-check for the pure helpers and the machinery: `node test.js`.
 const assert = require("assert");
-const { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, historyByDay, heatmapWeeks, level, rollUp, fuzzy, periodStart, goalProgress, goalPace, canComplete, goalDone } = require("./bootstrap.js");
+const { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, historyByDay, heatmapWeeks, streaks, level, rollUp, fuzzy, periodStart, goalProgress, goalPace, canComplete, goalDone } = require("./bootstrap.js");
 
 // A bare number means minutes; h/m/s are honoured; junk is ignored.
 assert.strictEqual(parseDuration("25"), 1500);
@@ -97,6 +97,21 @@ assert.ok(grid.at(-1).slice(grid.at(-1).findIndex((c) => c && c.day === today) +
 assert.strictEqual(new Date(grid[0][0].day).getDay(), 1);     // columns start on Monday
 assert.strictEqual(cells.filter((c) => c.day === today)[0].seconds, 1200);  // today's total
 assert.strictEqual(cells.filter((c) => c.seconds > 0).length, 3);  // 3 days with sessions in range
+// Streaks: days in a row, now and at best. Yesterday still counts as current —
+// a streak that died at midnight would be broken every morning.
+const day = (back) => { const d = new Date(today); d.setDate(d.getDate() - back); return { started: d.getTime(), seconds: 60 }; };
+assert.deepStrictEqual(streaks([], Date.now()), { current: 0, longest: 0 });
+assert.deepStrictEqual(streaks([day(0)], Date.now()), { current: 1, longest: 1 });
+assert.deepStrictEqual(streaks([day(0), day(1), day(2)], Date.now()), { current: 3, longest: 3 });
+assert.deepStrictEqual(streaks([day(1), day(2)], Date.now()), { current: 2, longest: 2 },
+	"a run ending yesterday is still running");
+assert.deepStrictEqual(streaks([day(2), day(3)], Date.now()), { current: 0, longest: 2 },
+	"but one ending the day before is over");
+assert.deepStrictEqual(streaks([day(0), day(5), day(6), day(7), day(8)], Date.now()),
+	{ current: 1, longest: 4 }, "the best run need not be the current one");
+assert.deepStrictEqual(streaks([day(0), day(0), day(1)], Date.now()), { current: 2, longest: 2 },
+	"two sessions in a day are one day");
+
 // Days are unique and strictly increasing across the grid.
 assert.ok(cells.every((c, i) => i === 0 || c.day > cells[i - 1].day));
 
@@ -257,7 +272,13 @@ const node = (tag) => ({ tag, className: "", textContent: "", id: "", title: "",
 	replaceChildren(...c) { this.children = []; this.append(...c); },
 	listeners: {},
 	addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); },
-	remove() {}, querySelectorAll: () => [], focus() {}, replaceWith() {} });
+	remove() {
+		const p = this.parentElement;
+		if (p) p.children = p.children.filter((c) => c !== this);
+		this.parentElement = null;
+		this.isConnected = false;
+	},
+	querySelectorAll: () => [], focus() {}, replaceWith() {} });
 const fakeDoc = () => ({ defaultView: { innerWidth: 900 }, head: node("head"), body: node("body"), title: "",
 	createElement: node, getElementById: () => null, querySelectorAll: () => [],
 	addEventListener() {}, removeEventListener() {} });
@@ -621,7 +642,32 @@ I.shutdown().catch((e) => { throw e; });   // stops and saves before its first a
 assert.strictEqual(I.getTimer(), null, "no timer survives the upgrade");
 assert.ok(running.seconds > 0, "its time was saved on the way out");
 
-// (5) Under a minute is a misclick, not reading — dropped rather than filed.
+// (5) The same popup out in the library, where there is no reader toolbar to
+// hang it on. It follows the running timer; with none, the selection.
+I.setActive(true);                       // shutdown() above turned everything off
+I.setDB({ queryAsync: () => Promise.resolve([]) });
+const mainDoc = fakeDoc();
+const selected = [];
+global.Zotero.getMainWindow = () => ({ document: mainDoc, focus() {},
+	ZoteroPane: { selectItem() {}, getSelectedItems: () => selected } });
+const panels = () => mainDoc.body.children.filter((c) => (c.className || "").includes("rt-panel"));
+
+I.toggleMainPanel();
+assert.strictEqual(panels().length, 0, "nothing selected and nothing running opens nothing");
+
+selected.push(book);
+I.toggleMainPanel();
+assert.strictEqual(panels().length, 1, "the menu item opens the panel over the library");
+const filled = [];
+const dig = (n) => { filled.push(n); (n.children || []).forEach(dig); };
+panels().forEach(dig);
+assert.ok(filled.some((n) => (n.textContent || "").includes("Mark as read")),
+	"and fills it — the whole panel, not just its box");
+I.toggleMainPanel();
+assert.strictEqual(panels().length, 0, "and the same menu item closes it");
+I.closePanel();
+
+// (6) Under a minute is a misclick, not reading — dropped rather than filed.
 // Unless something was typed against it: that text is someone's, not noise.
 I.setDB({ queryAsync: () => Promise.resolve([]) });
 I.log.length = 0;

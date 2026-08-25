@@ -1,4 +1,6 @@
 reading-time-row-label = Reading time
+reading-time-panel-menu =
+    .label = Reading Timer…
 reading-time-history-menu =
     .label = Reading Time History…
 reading-time-item-history-menu =

@@ -33,6 +33,11 @@ the reading and the note-taking together. A note in the item pane or the
 reader's sidebar gets no button — there the reader's own timer is already
 counting onto the same item.
 
+Away from the reader the same popup is a menu item: **Tools → Reading Timer…**
+opens it over the library, on whatever is being timed — or on the selected item
+when nothing is. A running timer is otherwise invisible the moment you leave the
+reader tab.
+
 While a timer runs the live time sits inside the clock button, so you can close
 the popup and keep reading. The popup also shows **This item / Today / Last 7
 days**, and the item's total appears as a **Reading time** row in the item pane
@@ -48,7 +53,9 @@ would rebuild the tree.
 **Tools → Reading Time History…** (or the 📊 button in the reader popup) opens a
 window with:
 
-- totals for today / 7 days / 30 days / all time;
+- totals for today / 7 days / 30 days / all time, and the streak you're on
+  (`🔥 12-day streak · longest 31`) while one is alive — yesterday still counts,
+  so it doesn't break every morning before you sit down;
 - a GitHub-style heatmap of the last 53 weeks — hover a square for that day's
   time, click one to jump to that day below;
 - every day you read, newest first, with each item's time and session count.

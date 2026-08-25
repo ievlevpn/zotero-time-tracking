@@ -566,6 +566,13 @@ const CSS = `
 	padding:0 5px; font-size:15px; background:none; border:none; cursor:pointer; }
 .rt-live { font:12px/1 sans-serif; opacity:.85; white-space:nowrap; }
 .rt-live:empty { display:none; }
+/* The same greens as the history heatmap, and the same swap: dark mode wants
+   the *finished* bar brighter than the running one, or a completed goal reads
+   as an empty bar against a dark panel. */
+.rt-panel { --rt-bar:#40c463; --rt-bar-done:#216e39; }
+@media (prefers-color-scheme: dark) {
+	.rt-panel { --rt-bar:#26a641; --rt-bar-done:#39d353; }
+}
 .rt-panel { position:fixed; z-index:99999; width:260px; box-sizing:border-box;
 	background:Canvas; color:CanvasText; border:1px solid GrayText; border-radius:6px;
 	box-shadow:0 2px 10px rgba(0,0,0,.25); font:13px sans-serif; padding:10px; }
@@ -595,13 +602,14 @@ const CSS = `
 .rt-panel .rt-seg button.on { background:Highlight; color:HighlightText; }
 .rt-panel .bar { height:6px; border-radius:3px; background:color-mix(in srgb, CanvasText 15%, Canvas);
 	overflow:hidden; margin-top:3px; }
-.rt-panel .bar i { display:block; height:100%; background:#40c463; }
-.rt-panel .bar i.done { background:#216e39; }
+.rt-panel .bar i { display:block; height:100%; background:var(--rt-bar); }
+.rt-panel .bar i.done { background:var(--rt-bar-done); }
 .rt-panel .rt-pom { display:flex; align-items:center; gap:6px; margin-top:8px; }
 /* a class rule with display beats the UA's [hidden], so say it again */
 .rt-panel .rt-pom[hidden] { display:none; }
-.rt-panel .rt-pom .rt-muted { flex:1; }
+.rt-panel .rt-pom .rt-muted { flex:1; cursor:pointer; }
 .rt-panel .rt-pom button { flex:0 0 auto; padding:2px 8px; }
+.rt-panel .rt-pom button[hidden] { display:none; }   /* same trap as above */
 `;
 
 function injectCSS(doc) {
@@ -787,13 +795,48 @@ function openPanel(reader, doc, btn) {
 	const vw = (doc.defaultView && doc.defaultView.innerWidth) || 800;
 	box.style.top = rect.bottom + 4 + "px";
 	box.style.left = Math.max(8, Math.min(rect.left, vw - 268)) + "px";
-	doc.body.append(box);
+	// The main window is a XUL <window>: no <body> to append to, but an HTML div
+	// renders there fine — Zotero's own tab bar is one.
+	(doc.body || doc.documentElement).append(box);
 
 	// Publish the panel before filling it, so however the rest of this function
 	// goes, what is on screen is always what closePanel() and paint() act on.
 	panel = { el: box, btn, cleanup: () => {}, refresh: () => {}, flush: () => {} };
 	panel.cleanup = watchOutside(reader, doc, box, btn);
 	tryFill(doc, box, reader);
+}
+
+// Nothing to anchor to in the main window — Zotero has no plugin API for a
+// toolbar button there — so the panel hangs under the toolbar at the top right,
+// which openPanel's own clamp works out. One object, not one per call, so the
+// menu item toggles the panel instead of reopening it.
+const mainAnchor = { getBoundingClientRect: () => ({ bottom: 44, left: 1e6 }) };
+
+// Which item the main-window panel is about: whatever is being timed, since a
+// running timer being invisible out here is the whole reason for it; failing
+// that, whatever is selected in the library.
+function mainPanelItem() {
+	if (timer) {
+		const cut = timer.id.indexOf("/");
+		const id = safe(() => Zotero.Items.getIDFromLibraryAndKey(
+			Number(timer.id.slice(0, cut)), timer.id.slice(cut + 1)), null);
+		if (id) return id;
+	}
+	const win = Zotero.getMainWindow();
+	const sel = win && safe(() => win.ZoteroPane.getSelectedItems(), null);
+	return sel && sel.length ? sel[0].id : null;
+}
+
+// The reader popup, out in the library: the same stats, timer controls, goals
+// and manual entry, for the item you're timing or the one you've selected.
+function toggleMainPanel() {
+	const win = Zotero.getMainWindow();
+	if (!win) return;
+	if (panel && panel.btn === mainAnchor) return closePanel();
+	const itemID = mainPanelItem();
+	if (!itemID) return notify("⏱ Select an item to see its reading time");
+	injectCSS(win.document);
+	togglePanel({ itemID }, win.document, mainAnchor);
 }
 
 // The item may not be in Zotero's cache the instant you open the popup on a tab
@@ -1011,12 +1054,17 @@ function fillPanel(doc, box, item, reader) {
 		rebuild();
 	}));
 
-	// Focus length, adjustable before or during a run.
+	// Focus length, adjustable before or during a run — but the adjusters stay
+	// out of the way until asked for. It is a setting, changed about twice ever,
+	// and it was sitting permanently on the face of a running clock.
 	const pom = el(doc, "div", "rt-pom");
 	const pomLabel = el(doc, "span", "rt-muted");
+	pomLabel.title = "Change the focus length";
 	const less = button("−5", () => bumpFocus(-5));
 	const more5 = button("+5", () => bumpFocus(5));
+	less.hidden = more5.hidden = true;
 	less.title = more5.title = "Pomodoro focus length";
+	pomLabel.addEventListener("click", () => { less.hidden = more5.hidden = !less.hidden; });
 	pom.append(pomLabel, less, more5);
 	box.insertBefore(pom, add);
 
@@ -1130,6 +1178,26 @@ function heatmapWeeks(rows, now, weeks = 53) {
 		out.push(week);
 	}
 	return out;
+}
+
+// Days read in a row, now and at best. Walks with setDate() rather than adding
+// 86400000, for the same reason the heatmap does: a DST change would otherwise
+// skip a day and break the run. Yesterday counts as current — a streak that
+// dies at midnight would be broken every morning before you sit down.
+function streaks(rows, now) {
+	const days = new Set(rows.map((r) => startOfDay(r.started)));
+	const step = (ms, by) => { const d = new Date(ms); d.setDate(d.getDate() + by); return d.getTime(); };
+	let longest = 0, run = 0, prev = null;
+	for (const day of [...days].sort((a, b) => a - b)) {
+		run = prev !== null && step(prev, 1) === day ? run + 1 : 1;
+		if (run > longest) longest = run;
+		prev = day;
+	}
+	const today = startOfDay(now);
+	let at = days.has(today) ? today : step(today, -1);
+	let current = 0;
+	while (days.has(at)) { current++; at = step(at, -1); }
+	return { current, longest };
 }
 
 // Five buckets, GitHub-style: nothing, a look, a sitting, a session, a day of it.
@@ -1441,6 +1509,8 @@ h1 { font-size:15px; margin:0 0 12px; }
 .session:hover .snote-blank { opacity:1; }
 .snote-input { flex:1; min-width:0; padding:1px 5px; font:11px sans-serif;
 	background:Canvas; color:CanvasText; border:1px solid GrayText; border-radius:4px; }
+
+.streak { font-size:12px; color:GrayText; margin:6px 0 2px; }
 
 /* heatmap */
 body { --l0:#ebedf0; --l1:#9be9a8; --l2:#40c463; --l3:#30a14e; --l4:#216e39; }
@@ -2000,6 +2070,14 @@ function buildHistory(win) {
 		sums.append(box);
 	}
 	doc.body.append(sums);
+
+	// Only while a streak is alive: "longest 31" on its own, the morning after
+	// one breaks, is a scolding rather than a fact worth reading.
+	const { current, longest } = streaks(rows, Date.now());
+	if (current) {
+		doc.body.append(el(doc, "div", "streak", `🔥 ${current}-day streak`
+			+ (longest > current ? ` · longest ${longest}` : "")));
+	}
 	if (historyView === "collections") return buildCollections(doc, win, rows);
 	doc.body.append(...heatmapEls(doc, rows));
 
@@ -2093,7 +2171,10 @@ function startup({ id }) {
 		menuID: "reading-time-history",
 		pluginID: id,
 		target: "main/menubar/tools",
-		menus: [{ menuType: "menuitem", l10nID: "reading-time-history-menu", onCommand: () => openHistory() }],
+		menus: [
+			{ menuType: "menuitem", l10nID: "reading-time-panel-menu", onCommand: () => safe(toggleMainPanel) },
+			{ menuType: "menuitem", l10nID: "reading-time-history-menu", onCommand: () => openHistory() },
+		],
 	});
 	collectionMenuID = Zotero.MenuManager.registerMenu({
 		menuID: "reading-time-collection-history",
@@ -2197,7 +2278,7 @@ function uninstall() {}
 
 // node-only: lets test.js import the pure helpers; no-op inside Zotero.
 if (typeof module !== "undefined") {
-	module.exports = { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, historyByDay, heatmapWeeks, level, rollUp, fuzzy, periodStart, goalProgress, goalPace, canComplete, goalDone };
+	module.exports = { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, historyByDay, heatmapWeeks, streaks, level, rollUp, fuzzy, periodStart, goalProgress, goalPace, canComplete, goalDone };
 	// Enough of the machinery for test.js to drive a whole session. A smoke test
 	// is what catches an edit that quietly deletes a function everything calls.
 	module.exports.__internals = {
@@ -2205,7 +2286,7 @@ if (typeof module !== "undefined") {
 		reparentRows, idFor, readerOpenFor, adoptOpenNotes, shutdown, log, goals, bars,
 		setView: (v) => { historyView = v; },
 		setPick: (v) => { goalPick = v; },
-		toggleRead,
+		toggleRead, toggleMainPanel,
 		commitGoal, toggleComplete, applyReadTag, checkGoals,
 		setActive: (v) => { active = v; }, setDB: (v) => { db = v; }, getTimer: () => timer,
 		setRegistered: (col, row) => { columnKey = col; infoRowID = row; },
