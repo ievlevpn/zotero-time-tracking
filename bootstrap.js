@@ -615,7 +615,9 @@ const CSS = `
 .rt-panel.rt-corner { bottom:12px; right:12px; }
 .rt-panel.rt-folded { width:auto; }
 .rt-panel .rt-mini { display:flex; align-items:center; gap:6px; white-space:nowrap; }
-.rt-panel .rt-mini b { flex:1; font-variant-numeric:tabular-nums; overflow:hidden; text-overflow:ellipsis; }
+.rt-panel .rt-mini b { flex:0 0 auto; font-variant-numeric:tabular-nums; }
+.rt-panel .rt-mini .rt-back { flex:1; min-width:0; max-width:170px; overflow:hidden;
+	text-overflow:ellipsis; text-decoration:underline; cursor:pointer; }
 .rt-panel .rt-mini button { flex:0 0 auto; font:11px/1.6 sans-serif; padding:0 4px; background:none;
 	border:1px solid transparent; border-radius:4px; color:GrayText; cursor:pointer; }
 .rt-panel .rt-mini button:hover { color:CanvasText; border-color:GrayText; }
@@ -821,20 +823,39 @@ function openPanel(reader, doc, btn) {
 	tryFill(doc, box, reader);
 }
 
-// The floating clock, bottom right of the library. A running timer is otherwise
-// invisible the moment you leave the reader tab, so this shows itself — and only
-// there: over a reader or a note tab the clock is already in the toolbar, and a
-// box floating on top of what you're reading would be in the way.
+// The floating clock, bottom right. A running timer is otherwise invisible the
+// moment you leave the tab it is on, so this shows itself wherever you go in
+// Zotero — the library, another book, a note. The one exception is the tab of
+// the very thing being timed: there the clock is already in the toolbar, and a
+// second one floating over the page would only be in the way.
 const mainAnchor = { corner: true, getBoundingClientRect: () => ({ bottom: 0, left: 0 }) };
 let miniFolded = true;      // a line with the time; unfold for the whole panel
 let miniDismissed = null;   // the session ✕ was pressed for
 
 // Called from paint(), so it settles within a second of anything changing —
 // a timer starting or stopping, or a tab being switched.
+// Is the tab in front of us the one the timer is on? Its own toolbar has the
+// clock, so ours stays out. Asked of the selected tab rather than its type: a
+// *different* book's tab is somewhere the timer is just as invisible.
+function onTimedTab(win) {
+	const tabID = safe(() => win.Zotero_Tabs.selectedID, null);
+	if (!tabID) return false;
+	const view = safe(() => Zotero.Reader.getByTabID(tabID), null)
+		|| noteViews().find((e) => e.tabID === tabID);
+	return !!view && safe(() => idFor(view), null) === timer.id;
+}
+
+// The tab the timer is on, if it is still open — the folded line's title takes
+// you back to it, and to the library copy when nothing is open any more.
+function backToTimed(win, item) {
+	const view = openViews().find((v) => safe(() => idFor(v), null) === timer.id);
+	if (view && view.tabID) return safe(() => win.Zotero_Tabs.select(view.tabID));
+	safe(() => win.ZoteroPane.selectItem(item.id));
+}
+
 function autoMini() {
 	const win = Zotero.getMainWindow();
-	const inLibrary = !!win && safe(() => win.Zotero_Tabs.selectedType === "library", false);
-	const want = !!timer && inLibrary && miniDismissed !== timer.row;
+	const want = !!win && !!timer && miniDismissed !== timer.row && !onTimedTab(win);
 	const have = !!panel && panel.btn === mainAnchor;
 	if (want === have) return;
 	if (!want) return closePanel();
@@ -849,9 +870,14 @@ function autoMini() {
 // The corner panel's own line: the live time, fold, and hide. Returns its
 // ticker rather than setting panel.refresh, so it can be chained in front of
 // whatever fillPanel sets when the panel is unfolded.
-function miniHead(doc, rebuild) {
+function miniHead(doc, item, rebuild) {
 	const head = el(doc, "div", "rt-mini");
 	const live = el(doc, "b");
+	// The title is a way back: whatever is being timed is, by definition, not
+	// what you are looking at.
+	const back = el(doc, "span", "rt-back", item.getDisplayTitle());
+	back.title = "Back to this item";
+	back.addEventListener("click", () => safe(() => backToTimed(Zotero.getMainWindow(), item)));
 	const fold = el(doc, "button", null, miniFolded ? "▴" : "▾");
 	const shut = el(doc, "button", null, "✕");
 	fold.title = miniFolded ? "Show the timer controls" : "Fold to one line";
@@ -861,12 +887,8 @@ function miniHead(doc, rebuild) {
 		miniDismissed = timer && timer.row;
 		closePanel();
 	}));
-	head.append(live, fold, shut);
-	// Folded, the line is all the context there is, so it carries the title too.
-	const tick = () => {
-		const what = miniFolded && timer && timer.row.title ? ` · ${timer.row.title}` : "";
-		live.textContent = timer ? liveText() + what : "";
-	};
+	head.append(live, back, fold, shut);
+	const tick = () => { live.textContent = timer ? liveText() : ""; };
 	return { el: head, tick };
 }
 
@@ -884,7 +906,7 @@ function tryFill(doc, box, reader) {
 	box.replaceChildren();
 	panel.refresh = () => {};
 	panel.flush = () => {};
-	const mini = panel.btn === mainAnchor ? miniHead(doc, () => tryFill(doc, box, reader)) : null;
+	const mini = panel.btn === mainAnchor ? miniHead(doc, item, () => tryFill(doc, box, reader)) : null;
 	if (mini) {
 		box.className = "rt-panel rt-corner" + (miniFolded ? " rt-folded" : "");
 		box.append(mini.el);

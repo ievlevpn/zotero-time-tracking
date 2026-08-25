@@ -33,13 +33,15 @@ the reading and the note-taking together. A note in the item pane or the
 reader's sidebar gets no button — there the reader's own timer is already
 counting onto the same item.
 
-Leave the reader tab with a timer running and the clock follows you: a small box
-in the bottom right of the library, showing the live time and what it's on. It
-appears on its own and needs no menu item — a running timer is otherwise
-invisible out there. **▴** unfolds it into the whole popup (stats, Pause/Stop,
-goals, manual entry), **▾** folds it back, and **✕** hides it until the next
-session starts. It never shows over a reader or note tab, where the clock is
-already in the toolbar.
+Leave the tab you're reading on and the clock follows you: a small box in the
+bottom right, wherever you go in Zotero — the library, another book, a note. It
+appears on its own and needs no menu item; a running timer is otherwise
+invisible the moment you look away. The title on it is the way back — click it
+to jump to that tab, or to the item in the library if nothing is open on it any
+more. **▴** unfolds the whole popup (stats, Pause/Stop, goals, manual entry),
+**▾** folds it back, **✕** hides it until the next session starts. The one place
+it stays out of is the tab of the very thing being timed, which has the clock in
+its own toolbar already.
 
 While a timer runs the live time sits inside the clock button, so you can close
 the popup and keep reading. The popup also shows **This item / Today / Last 7

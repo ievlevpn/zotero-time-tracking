@@ -204,7 +204,8 @@ global.Zotero = {
 	logError: (e) => logged.push(e),   // checked below: only expected ones allowed
 	getMainWindow: () => null,         // no window yet; the corner clock stays away
 	Items: { get: (id) => ({ 10: attach, 1: book }[id] || false) },
-	Reader: { get _readers() { return openReaders; } },
+	Reader: { get _readers() { return openReaders; },
+		getByTabID: (id) => openReaders.find((r) => r.tabID === id) || null },
 	Notes: { get _editorInstances() { return openNotes; } },
 	Utilities: { randomString: () => "id" + written.length },
 	ItemTreeManager: { refreshColumns: () => refreshes++ },
@@ -648,10 +649,11 @@ assert.ok(running.seconds > 0, "its time was saved on the way out");
 I.setActive(true);                       // shutdown() above turned everything off
 I.setDB({ queryAsync: () => Promise.resolve([]) });
 const mainDoc = fakeDoc();
-let tabType = "library";
+let selectedTab = "zotero-pane";
+const selected = [];
 global.Zotero.getMainWindow = () => ({ document: mainDoc, focus() {},
-	Zotero_Tabs: { get selectedType() { return tabType; } },
-	ZoteroPane: { selectItem() {} } });
+	Zotero_Tabs: { get selectedID() { return selectedTab; }, select: (id) => selectedTab = id },
+	ZoteroPane: { selectItem: (id) => selected.push(id) } });
 const mini = () => mainDoc.body.children.filter((c) => (c.className || "").includes("rt-corner"));
 const dig = (n, out = []) => { out.push(n); (n.children || []).forEach((c) => dig(c, out)); return out; };
 const inMini = () => (mini().length ? dig(mini()[0]) : []);
@@ -673,12 +675,26 @@ fold.listeners.click.forEach((fn) => fn());
 assert.ok(inMini().some((n) => (n.textContent || "").includes("Mark as read")),
 	"unfolding gives the whole panel");
 
-tabType = "reader";
+// Only the timed item's own tab is off limits — it has the clock in its toolbar.
+// Another book's tab is somewhere the timer is just as invisible.
+openReaders = [{ itemID: 30, tabID: "tab-book" }, { itemID: 40, tabID: "tab-other" }];
+selectedTab = "tab-book";
 I.autoMini();
-assert.strictEqual(mini().length, 0, "it keeps off a reader tab, which has its own clock");
-tabType = "library";
+assert.strictEqual(mini().length, 0, "not over the tab of the very thing being timed");
+selectedTab = "tab-other";
 I.autoMini();
-assert.strictEqual(mini().length, 1, "and comes back with the library");
+assert.strictEqual(mini().length, 1, "but yes over another book's");
+selectedTab = "zotero-pane";
+I.autoMini();
+assert.strictEqual(mini().length, 1, "and in the library");
+
+// The title is the way back to whatever is being timed.
+inMini().find((n) => (n.className || "") === "rt-back").listeners.click.forEach((fn) => fn());
+assert.strictEqual(selectedTab, "tab-book", "its title selects the tab it is on");
+openReaders = [];
+I.autoMini();
+inMini().find((n) => (n.className || "") === "rt-back").listeners.click.forEach((fn) => fn());
+assert.deepStrictEqual(selected, [1], "with nothing open, it falls back to the library");
 
 inMini().find((n) => n.textContent === "✕").listeners.click.forEach((fn) => fn());
 assert.strictEqual(mini().length, 0, "✕ hides it");
