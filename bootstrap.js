@@ -773,6 +773,7 @@ function paint() {
 		if (!safe(() => paintBar(bar), false)) bars.delete(key);
 	}
 	if (panel) safe(() => { if (panel.el.isConnected) panel.refresh(); else closePanel(); });
+	if (historyWin && !historyWin.closed) safe(historyTick);
 	safe(autoMini);
 }
 
@@ -1539,6 +1540,9 @@ h1 { font-size:15px; margin:0 0 12px; }
 .item .caret { color:GrayText; font-size:9px; width:9px; }
 .coll { padding-left:10px; }
 .nav { display:flex; gap:4px; }
+.live { display:flex; align-items:center; gap:6px; min-width:0; font-size:12px; }
+.live .t { font-variant-numeric:tabular-nums; white-space:nowrap; }
+.live .w { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:GrayText; }
 .top button.on { background:Highlight; color:HighlightText; }
 .goal { margin:14px 0; }
 .picker { max-height:260px; overflow-y:auto; margin:8px 0; }
@@ -1609,6 +1613,7 @@ i[data-l="4"] { background:var(--l4); }
 `;
 
 let historyWin = null;
+let historyTick = () => {};   // set by buildHistory: keeps its live clock moving
 let historyView = "days";   // "days" | "collections" | "goals"
 let goalDraft = null;       // the goal being edited, or a target waiting for one
 let goalPick = null;        // "item" | "collection" while choosing what a new goal is about
@@ -2103,6 +2108,31 @@ function buildCollections(doc, win, rows) {
 	search.focus();
 }
 
+// The running timer in the history window's header — the same clock the reader
+// toolbar shows, with the two controls worth having from this far away.
+function liveChip(doc, win) {
+	const chip = el(doc, "div", "live");
+	const time = el(doc, "span", "t");
+	const what = el(doc, "span", "w");
+	const hold = el(doc, "button");
+	const end = el(doc, "button", null, "⏹");
+	end.title = "Stop and log this session";
+	const draw = () => {
+		if (!timer) return;
+		time.textContent = liveText();
+		what.textContent = currentTitle(timer.row) || timer.row.title || "";
+		hold.textContent = timer.running ? "⏸" : "▶";
+		hold.title = timer.running ? "Pause" : "Resume";
+	};
+	hold.addEventListener("click", () => safe(() => { setPaused(timer && timer.running); draw(); }));
+	// Stopping changes every total on the page, so redraw the lot rather than
+	// leaving yesterday's numbers under a chip that is no longer there.
+	end.addEventListener("click", () => safe(() => { stop(); buildHistory(win); }));
+	chip.append(time, what, hold, end);
+	draw();
+	return { el: chip, draw };
+}
+
 function buildHistory(win) {
 	const doc = win.document;
 	const main = Zotero.getMainWindow();
@@ -2122,6 +2152,13 @@ function buildHistory(win) {
 		const tab = el(doc, "button", historyView === id ? "on" : null, label);
 		tab.addEventListener("click", () => { historyView = id; safe(() => buildHistory(win)); });
 		nav.append(tab);
+	}
+	if (timer) {
+		const chip = liveChip(doc, win);
+		head.append(chip.el);
+		historyTick = () => (timer ? chip.draw() : buildHistory(win));
+	} else {
+		historyTick = () => { if (timer) buildHistory(win); };   // one started elsewhere
 	}
 	head.append(nav);
 	doc.body.replaceChildren(head);
