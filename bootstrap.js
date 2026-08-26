@@ -1583,7 +1583,7 @@ h1 { font-size:15px; margin:0 0 12px; }
 .snote-input { flex:1; min-width:0; padding:1px 5px; font:11px sans-serif;
 	background:Canvas; color:CanvasText; border:1px solid GrayText; border-radius:4px; }
 
-.streak { font-size:12px; color:GrayText; margin:6px 0 2px; }
+.streak { font-size:12px; color:GrayText; margin:6px 0 10px; }
 
 /* heatmap */
 body { --l0:#ebedf0; --l1:#9be9a8; --l2:#40c463; --l3:#30a14e; --l4:#216e39; }
@@ -1591,12 +1591,13 @@ body { --l0:#ebedf0; --l1:#9be9a8; --l2:#40c463; --l3:#30a14e; --l4:#216e39; }
 	body { --l0:#2a2f35; --l1:#0e4429; --l2:#006d32; --l3:#26a641; --l4:#39d353; }
 }
 .hm { display:flex; gap:4px; align-items:flex-start; overflow-x:auto; padding-bottom:4px; }
+.hm > * { flex:none; }  /* narrow window scrolls the calendar, never squeezes it */
 .hm-wd, .hm-cols { display:grid; grid-template-rows:repeat(7, 10px); gap:3px; }
 .hm-cols { grid-auto-flow:column; grid-auto-columns:10px; }
 .hm-wd { margin-top:12px; }  /* clear the month row so the rows line up */
 .hm-wd span { font-size:9px; line-height:10px; color:GrayText; padding-right:2px; }
 .hm-months { display:grid; grid-auto-flow:column; grid-auto-columns:10px; gap:3px; height:12px; }
-.hm-months span { font-size:9px; color:GrayText; white-space:nowrap; }
+.hm-months span { font-size:9px; color:GrayText; white-space:nowrap; overflow:visible; }
 .hm-cols i { border-radius:2px; background:var(--l0); }
 .hm-cols i[data-l="1"] { background:var(--l1); }
 .hm-cols i[data-l="2"] { background:var(--l2); }
@@ -1606,6 +1607,7 @@ body { --l0:#ebedf0; --l1:#9be9a8; --l2:#40c463; --l3:#30a14e; --l4:#216e39; }
 .hm-cols i.blank { background:transparent; }
 .legend { display:flex; align-items:center; gap:3px; justify-content:flex-end;
 	font-size:10px; color:GrayText; margin:2px 0 16px; }
+.legend .cap { margin-right:4px; }
 .legend i { width:10px; height:10px; border-radius:2px; background:var(--l0); }
 `;
 
@@ -1662,15 +1664,18 @@ function heatmapEls(doc, rows) {
 
 	const months = el(doc, "div", "hm-months");
 	const cols = el(doc, "div", "hm-cols");
-	let lastMonth = -1;
+	let lastMonth = -1, lastLabel = -99;
 	weeks.forEach((week, w) => {
 		const first = week.find(Boolean);
 		const month = first ? new Date(first.day).getMonth() : lastMonth;
 		// Label a column when its month is new, except in the last two columns
-		// where the text would run off the end.
-		const label = month !== lastMonth && w < weeks.length - 2
+		// where the text would run off the end. A label overflows its 10px track,
+		// so hold off unless there is room since the last one — a short month at
+		// the edge of the window would otherwise print on top of its neighbour.
+		const label = month !== lastMonth && w < weeks.length - 2 && w - lastLabel >= 3
 			? new Date(first.day).toLocaleDateString(undefined, { month: "short" }) : "";
 		months.append(el(doc, "span", null, label));
+		if (label) lastLabel = w;
 		lastMonth = month;
 
 		for (const cell of week) {
@@ -1696,13 +1701,14 @@ function heatmapEls(doc, rows) {
 	grid.append(wd, stack);
 
 	const legend = el(doc, "div", "legend");
-	legend.append(el(doc, "span", null, "Less"));
+	legend.title = "How much a square's colour means you read that day";
+	legend.append(el(doc, "span", "cap", "Time read per day:"), el(doc, "span", null, "less"));
 	for (let l = 0; l <= 4; l++) {
 		const box = el(doc, "i");
 		if (l) box.dataset.l = l;
 		legend.append(box);
 	}
-	legend.append(el(doc, "span", null, "More"));
+	legend.append(el(doc, "span", null, "more"));
 	return [grid, legend];
 }
 
