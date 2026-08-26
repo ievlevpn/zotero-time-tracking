@@ -1583,14 +1583,15 @@ h1 { font-size:15px; margin:0 0 12px; }
 .snote-input { flex:1; min-width:0; padding:1px 5px; font:11px sans-serif;
 	background:Canvas; color:CanvasText; border:1px solid GrayText; border-radius:4px; }
 
-.streak { font-size:12px; color:GrayText; margin:6px 0 10px; }
+.streak { font-size:12px; color:CanvasText; margin:6px 0 10px; }
 
 /* heatmap */
 body { --l0:#ebedf0; --l1:#9be9a8; --l2:#40c463; --l3:#30a14e; --l4:#216e39; }
 @media (prefers-color-scheme: dark) {
 	body { --l0:#2a2f35; --l1:#0e4429; --l2:#006d32; --l3:#26a641; --l4:#39d353; }
 }
-.hm { display:flex; gap:4px; align-items:flex-start; overflow-x:auto; padding-bottom:4px; }
+.hm { display:flex; gap:4px; align-items:flex-start; justify-content:safe center;
+	overflow-x:auto; padding-bottom:4px; margin-bottom:16px; }
 .hm > * { flex:none; }  /* narrow window scrolls the calendar, never squeezes it */
 .hm-wd, .hm-cols { display:grid; grid-template-rows:repeat(7, 10px); gap:3px; }
 .hm-cols { grid-auto-flow:column; grid-auto-columns:10px; }
@@ -1599,16 +1600,12 @@ body { --l0:#ebedf0; --l1:#9be9a8; --l2:#40c463; --l3:#30a14e; --l4:#216e39; }
 .hm-months { display:grid; grid-auto-flow:column; grid-auto-columns:10px; gap:3px; height:12px; }
 .hm-months span { font-size:9px; color:GrayText; white-space:nowrap; overflow:visible; }
 .hm-cols i { border-radius:2px; background:var(--l0); }
-.hm-cols i[data-l="1"] { background:var(--l1); }
-.hm-cols i[data-l="2"] { background:var(--l2); }
-.hm-cols i[data-l="3"] { background:var(--l3); }
-.hm-cols i[data-l="4"] { background:var(--l4); }
+i[data-l="1"] { background:var(--l1); }
+i[data-l="2"] { background:var(--l2); }
+i[data-l="3"] { background:var(--l3); }
+i[data-l="4"] { background:var(--l4); }
 .hm-cols i[data-l] { cursor:pointer; }
 .hm-cols i.blank { background:transparent; }
-.legend { display:flex; align-items:center; gap:3px; justify-content:flex-end;
-	font-size:10px; color:GrayText; margin:2px 0 16px; }
-.legend .cap { margin-right:4px; }
-.legend i { width:10px; height:10px; border-radius:2px; background:var(--l0); }
 `;
 
 let historyWin = null;
@@ -1658,7 +1655,8 @@ function openHistory(filter) {
 	else historyWin.addEventListener("load", build, { once: true });
 }
 
-// The calendar, its month row and its legend, as two block elements.
+// The calendar and its month row. Squares carry a tooltip saying how long that
+// day was, which is the whole legend anyone needed.
 function heatmapEls(doc, rows) {
 	const weeks = heatmapWeeks(rows, Date.now());
 
@@ -1700,16 +1698,7 @@ function heatmapEls(doc, rows) {
 	const grid = el(doc, "div", "hm");
 	grid.append(wd, stack);
 
-	const legend = el(doc, "div", "legend");
-	legend.title = "How much a square's colour means you read that day";
-	legend.append(el(doc, "span", "cap", "Time read per day:"), el(doc, "span", null, "less"));
-	for (let l = 0; l <= 4; l++) {
-		const box = el(doc, "i");
-		if (l) box.dataset.l = l;
-		legend.append(box);
-	}
-	legend.append(el(doc, "span", null, "more"));
-	return [grid, legend];
+	return grid;
 }
 
 // One logged session: when it started, how it was tracked, how long — and the
@@ -2158,7 +2147,7 @@ function buildHistory(win) {
 			+ (longest > current ? ` · longest ${longest}` : "")));
 	}
 	if (historyView === "collections") return buildCollections(doc, win, rows);
-	doc.body.append(...heatmapEls(doc, rows));
+	doc.body.append(heatmapEls(doc, rows));
 
 	const days = historyByDay(rows);
 	if (!days.length) {
