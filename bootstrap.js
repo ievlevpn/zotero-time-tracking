@@ -1543,7 +1543,6 @@ h1 { font-size:15px; margin:0; flex:1 0 100%; }  /* its own row inside .top */
 .coll { padding-left:10px; }
 .nav { display:flex; gap:4px; margin-left:auto; }
 .jump { position:relative; display:flex; }
-.jump input { position:absolute; left:0; bottom:0; width:100%; height:1px; opacity:0; pointer-events:none; }
 .more { display:block; margin:4px 0 16px; font:11px sans-serif; padding:3px 10px;
 	border:1px solid GrayText; border-radius:5px; background:transparent; color:CanvasText; cursor:pointer; }
 .more:hover { background:Highlight; color:HighlightText; }  /* stays right with no timer beside it */
@@ -1617,6 +1616,20 @@ i[data-l="3"] { background:var(--l3); }
 i[data-l="4"] { background:var(--l4); }
 .hm-cols i[data-l] { cursor:pointer; }
 .hm-cols i.blank { background:transparent; }
+
+/* date picker — Firefox's own panel can't be styled, so this is ours */
+.cal { position:absolute; top:calc(100% + 4px); right:0; z-index:10; padding:8px;
+	background:Canvas; color:CanvasText; border:1px solid GrayText; border-radius:6px;
+	box-shadow:0 4px 14px rgba(0,0,0,.25); }
+.cal-head { display:flex; align-items:center; gap:4px; margin-bottom:6px; font-size:12px; }
+.cal-head .m { flex:1; text-align:center; white-space:nowrap; }
+.cal-grid { display:grid; grid-template-columns:repeat(7, 24px); gap:2px; }
+.cal-grid span { font-size:9px; color:GrayText; text-align:center; }
+.top .cal button { font:11px sans-serif; height:22px; padding:0;
+	border:1px solid transparent; border-radius:4px; background:transparent; color:CanvasText; cursor:pointer; }
+.top .cal button:hover:not(:disabled) { background:Highlight; color:HighlightText; }
+.top .cal button.on { font-weight:700; background:var(--l1); }   /* days with reading on them */
+.top .cal button:disabled { color:GrayText; opacity:.45; cursor:default; }
 `;
 
 let historyWin = null;
@@ -2127,23 +2140,62 @@ function showDay(win, day) {
 	if (anchor) anchor.scrollIntoView({ block: "center", behavior: "smooth" });
 }
 
-// A date field hidden under a button that opens its picker: the native
-// calendar, minus the "mm/dd/yyyy" text box nobody asked for.
+// A month grid under the button. Firefox's native date panel can't be styled
+// and looked like a visitor from another program, so this draws its own.
 function dayPicker(doc, win, days) {
 	const wrap = el(doc, "div", "jump");
-	const input = el(doc, "input");
-	input.type = "date";
-	// toISOString() is UTC, which would name yesterday for anyone east of it.
-	const iso = (ms) => { const d = new Date(ms); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
-	input.max = iso(Date.now());
-	if (days.length) input.min = iso(days[days.length - 1].day);
-	input.addEventListener("input", () => safe(() => {
-		if (input.value) showDay(win, startOfDay(new Date(input.value + "T00:00").getTime()));
-	}));
 	const btn = el(doc, "button", null, "\u{1F4C5}");
 	btn.title = "Jump to a date";
-	btn.addEventListener("click", () => safe(() => (input.showPicker ? input.showPicker() : input.focus())));
-	wrap.append(btn, input);
+	const has = new Set(days.map((d) => d.day));
+	const today = startOfDay(Date.now());
+	const oldest = days.length ? days[days.length - 1].day : today;
+	const monthOf = (ms) => { const d = new Date(ms); return new Date(d.getFullYear(), d.getMonth(), 1); };
+	let cal = null, month = monthOf(today);
+
+	const away = (ev) => { if (!wrap.contains(ev.target)) close(); };
+	const esc = (ev) => { if (ev.key === "Escape") close(); };
+	function close() {
+		if (!cal) return;
+		cal.remove();
+		cal = null;
+		doc.removeEventListener("mousedown", away);
+		doc.removeEventListener("keydown", esc);
+	}
+
+	function draw() {
+		close();
+		cal = el(doc, "div", "cal");
+		const step = (by) => () => safe(() => { month.setMonth(month.getMonth() + by); draw(); });
+		const back = el(doc, "button", null, "‹"), fwd = el(doc, "button", null, "›");
+		back.disabled = month <= monthOf(oldest);
+		fwd.disabled = month >= monthOf(today);
+		back.addEventListener("click", step(-1));
+		fwd.addEventListener("click", step(1));
+		cal.append(el(doc, "div", "cal-head"));
+		cal.firstChild.append(back,
+			el(doc, "span", "m", month.toLocaleDateString(undefined, { month: "long", year: "numeric" })), fwd);
+
+		const grid = el(doc, "div", "cal-grid");
+		for (const d of ["M", "T", "W", "T", "F", "S", "S"]) grid.append(el(doc, "span", null, d));
+		const lead = (new Date(month.getFullYear(), month.getMonth(), 1).getDay() + 6) % 7;  // Monday first
+		for (let i = 0; i < lead; i++) grid.append(el(doc, "span"));
+		const last = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
+		for (let n = 1; n <= last; n++) {
+			const day = new Date(month.getFullYear(), month.getMonth(), n).getTime();
+			const cell = el(doc, "button", has.has(day) ? "on" : null, String(n));
+			cell.disabled = day > today || day < oldest;   // nothing logged out there to jump to
+			if (has.has(day)) cell.title = "Read on this day";
+			cell.addEventListener("click", () => { close(); safe(() => showDay(win, day)); });
+			grid.append(cell);
+		}
+		cal.append(grid);
+		wrap.append(cal);
+		doc.addEventListener("mousedown", away);   // close() above took the old pair off
+		doc.addEventListener("keydown", esc);
+	}
+
+	btn.addEventListener("click", () => safe(() => (cal ? close() : draw())));
+	wrap.append(btn);
 	return wrap;
 }
 
