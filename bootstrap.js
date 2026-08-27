@@ -26,6 +26,7 @@ const FOCUS_RANGE = [5, 120];
 
 const CHECK_IN = 3600;    // seconds of counted time between "still reading?" prompts
 const FLUSH_EVERY = 60;   // seconds between DB writes while a timer runs
+const DAY_PAGE = 30;      // days the history lists at once, and per "Show more"
 const ORPHAN_EVERY = 5;   // seconds between "is the book still open?" checks
 const MAX_STEP = 5;       // seconds; longer gaps mean the machine slept
 const MIN_SESSION = 60;   // seconds; anything shorter is a misclick, not reading
@@ -1516,7 +1517,7 @@ function dayLabel(ms) {
 
 const HISTORY_CSS = `
 body { margin:0; padding:16px; font:13px sans-serif; background:Canvas; color:CanvasText; }
-h1 { font-size:15px; margin:0 0 12px; }
+h1 { font-size:15px; margin:0; flex:1 0 100%; }  /* its own row inside .top */
 .sums { display:flex; gap:8px; margin-bottom:16px; }
 .sums div { flex:1; border:1px solid GrayText; border-radius:6px; padding:8px; text-align:center; }
 .sums b { display:block; font-size:15px; }
@@ -1530,7 +1531,8 @@ h1 { font-size:15px; margin:0 0 12px; }
 .item:hover .n { color:HighlightText; }
 .item b { font-variant-numeric:tabular-nums; white-space:nowrap; }
 .empty { color:GrayText; padding:24px 0; text-align:center; }
-.top { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.top { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between;
+	gap:10px 8px; margin-bottom:4px; }
 .item button { font:10px sans-serif; padding:0 5px; border:1px solid transparent;
 	border-radius:4px; background:transparent; color:inherit; cursor:pointer; }
 .item:hover button { border-color:HighlightText; }
@@ -1539,7 +1541,12 @@ h1 { font-size:15px; margin:0 0 12px; }
 .top button:hover, .session button:hover { background:Highlight; color:HighlightText; }
 .item .caret { color:GrayText; font-size:9px; width:9px; }
 .coll { padding-left:10px; }
-.nav { display:flex; gap:4px; }
+.nav { display:flex; gap:4px; margin-left:auto; }
+.jump { position:relative; display:flex; }
+.jump input { position:absolute; left:0; bottom:0; width:100%; height:1px; opacity:0; pointer-events:none; }
+.more { display:block; margin:4px 0 16px; font:11px sans-serif; padding:3px 10px;
+	border:1px solid GrayText; border-radius:5px; background:transparent; color:CanvasText; cursor:pointer; }
+.more:hover { background:Highlight; color:HighlightText; }  /* stays right with no timer beside it */
 .live { display:flex; align-items:center; gap:6px; min-width:0; font-size:12px; }
 .live .t { font-variant-numeric:tabular-nums; white-space:nowrap; }
 .live .w { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:GrayText; }
@@ -1614,6 +1621,7 @@ i[data-l="4"] { background:var(--l4); }
 
 let historyWin = null;
 let historyTick = () => {};   // set by buildHistory: keeps its live clock moving
+let dayLimit = DAY_PAGE;      // days listed before "Show more" — see showDay()
 let historyView = "days";   // "days" | "collections" | "goals"
 let goalDraft = null;       // the goal being edited, or a target waiting for one
 let goalPick = null;        // "item" | "collection" while choosing what a new goal is about
@@ -1645,6 +1653,7 @@ function openHistory(filter) {
 	const main = Zotero.getMainWindow();
 	if (!main) return;
 	historyFilter = filter || null;
+	dayLimit = DAY_PAGE;
 	safe(() => reparentRows(parentOf));   // items unloaded at startup get their chance here
 	if (historyWin && !historyWin.closed) {
 		historyWin.focus();
@@ -1688,10 +1697,7 @@ function heatmapEls(doc, rows) {
 			box.dataset.l = level(cell.seconds);
 			box.title = (fmtTotal(cell.seconds) || "Nothing") + " — " + new Date(cell.day)
 				.toLocaleDateString(undefined, { weekday: "short", year: "numeric", month: "short", day: "numeric" });
-			box.addEventListener("click", () => {
-				const anchor = doc.getElementById("d" + cell.day);
-				if (anchor) anchor.scrollIntoView({ block: "center", behavior: "smooth" });
-			});
+			box.addEventListener("click", () => safe(() => showDay(doc.defaultView, cell.day)));
 		}
 	});
 
@@ -2108,6 +2114,39 @@ function buildCollections(doc, win, rows) {
 	search.focus();
 }
 
+// Scroll the list to a day, listing as much of the past as it takes to get
+// there: clicking last January in the heatmap shouldn't land on nothing.
+// Days without sessions aren't in the list, so aim at the first one at or
+// before the date asked for.
+function showDay(win, day) {
+	const days = historyByDay(log.filter(inFilter));
+	const i = days.findIndex((d) => d.day <= day);
+	if (i < 0) return;
+	if (i >= dayLimit) { dayLimit = i + 1; buildHistory(win); }
+	const anchor = win.document.getElementById("d" + days[i].day);
+	if (anchor) anchor.scrollIntoView({ block: "center", behavior: "smooth" });
+}
+
+// A date field hidden under a button that opens its picker: the native
+// calendar, minus the "mm/dd/yyyy" text box nobody asked for.
+function dayPicker(doc, win, days) {
+	const wrap = el(doc, "div", "jump");
+	const input = el(doc, "input");
+	input.type = "date";
+	// toISOString() is UTC, which would name yesterday for anyone east of it.
+	const iso = (ms) => { const d = new Date(ms); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
+	input.max = iso(Date.now());
+	if (days.length) input.min = iso(days[days.length - 1].day);
+	input.addEventListener("input", () => safe(() => {
+		if (input.value) showDay(win, startOfDay(new Date(input.value + "T00:00").getTime()));
+	}));
+	const btn = el(doc, "button", null, "\u{1F4C5}");
+	btn.title = "Jump to a date";
+	btn.addEventListener("click", () => safe(() => (input.showPicker ? input.showPicker() : input.focus())));
+	wrap.append(btn, input);
+	return wrap;
+}
+
 // The running timer in the history window's header — the same clock the reader
 // toolbar shows, with the two controls worth having from this far away.
 function liveChip(doc, win) {
@@ -2160,6 +2199,7 @@ function buildHistory(win) {
 	} else {
 		historyTick = () => { if (timer) buildHistory(win); };   // one started elsewhere
 	}
+	if (historyView === "days") nav.append(dayPicker(doc, win, historyByDay(rows)));
 	head.append(nav);
 	doc.body.replaceChildren(head);
 
@@ -2191,7 +2231,7 @@ function buildHistory(win) {
 		doc.body.append(el(doc, "div", "empty", "No reading sessions yet."));
 		return;
 	}
-	for (const d of days) {
+	for (const d of days.slice(0, dayLimit)) {
 		const head = el(doc, "div", "day");
 		head.id = "d" + d.day;
 		head.append(el(doc, "span", null, dayLabel(d.day)), el(doc, "span", null, fmtTotal(d.seconds) || "0m"));
@@ -2223,6 +2263,18 @@ function buildHistory(win) {
 			row.addEventListener("click", () => { list.hidden = !list.hidden; caret.textContent = list.hidden ? "▸" : "▾"; });
 			doc.body.append(row, list);
 		}
+	}
+	if (days.length > dayLimit) {
+		const left = days.length - dayLimit;
+		const more = el(doc, "button", "more", `Show ${Math.min(DAY_PAGE, left)} more days · ${left} left`);
+		more.addEventListener("click", () => safe(() => {
+			const here = days[dayLimit - 1].day;   // rebuilding scrolls to the top otherwise
+			dayLimit += DAY_PAGE;
+			buildHistory(win);
+			const anchor = doc.getElementById("d" + here);
+			if (anchor) anchor.scrollIntoView({ block: "start" });
+		}));
+		doc.body.append(more);
 	}
 }
 
