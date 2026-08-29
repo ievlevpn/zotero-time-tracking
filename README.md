@@ -197,19 +197,20 @@ care about it. Zotero holds the file open while it runs, so read it with
 While it runs, the plugin publishes one function on `Zotero`:
 
 ```js
-Zotero.ReadingTime.addFeedSession(seconds, started)   // apiVersion 1
+Zotero.ReadingTime.addFeedSession(seconds, started, note)   // apiVersion 1
 ```
 
 It banks time *someone else* measured — a whole sitting in one go — against a
 stand-in target rather than any item, and shows up in the history as a single
 **Feed reading** row. Sittings under a minute are dropped, exactly as a timer's
-are; the return value says whether it was kept.
+are; the return value says whether it was kept. The optional `note` is a line
+about the sitting, landing in the same field a timer's note does.
 
 Check for it at the moment you call it, never at startup:
 
 ```js
 const rt = Zotero.ReadingTime;
-if (rt && rt.apiVersion === 1) rt.addFeedSession(900, Date.now() - 900e3);
+if (rt && rt.apiVersion === 1) rt.addFeedSession(900, Date.now() - 900e3, "arXiv math.PR");
 ```
 
 Plugins load in any order, and the object is withdrawn again on shutdown — a

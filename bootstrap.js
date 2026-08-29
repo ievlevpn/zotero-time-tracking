@@ -261,12 +261,12 @@ const startOfDay = (ms) => { const d = new Date(ms); d.setHours(0, 0, 0, 0); ret
 
 const totalFor = (item) => (item ? sumSeconds(log, { id: idOf(item) }) : 0);
 
-function addRow(item, mode, seconds, started = Date.now()) {
+function addRow(item, mode, seconds, started = Date.now(), note = null) {
 	if (!db) return null;
 	const row = {
 		id: Zotero.Utilities.randomString(12),
 		libraryID: item.libraryID, itemKey: item.key,
-		title: item.getDisplayTitle(), mode, started, seconds: Math.round(seconds), note: null,
+		title: item.getDisplayTitle(), mode, started, seconds: Math.round(seconds), note: note || null,
 	};
 	log.push(row);
 	db.queryAsync(`INSERT INTO sessions (${COLS.join(", ")}) VALUES (${COLS.map(() => "?").join(", ")})`,
@@ -295,10 +295,11 @@ const API = {
 	// Whoever did the measuring knows what counts — a riffle deck pauses when
 	// you walk away, which a clock in this process cannot see. Returns whether
 	// the session was kept; short ones are dropped, exactly as a timer's are.
-	addFeedSession(seconds, started = Date.now()) {
+	// The note is optional and is the same field a timer's note lands in.
+	addFeedSession(seconds, started = Date.now(), note = null) {
 		return safe(() => {
 			if (!db || !(seconds >= MIN_SESSION)) return false;
-			addRow(FEEDS, "feed", seconds, started);
+			addRow(FEEDS, "feed", seconds, started, note);
 			refreshViews();
 			return true;
 		}, false);

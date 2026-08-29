@@ -292,8 +292,11 @@ global.Zotero.Collections = { get: () => null, getByLibraryAndKey: () => null };
 book.getCollections = () => [];
 
 I.log.length = 0;
-I.log.push({ id: "h1", libraryID: 1, itemKey: "BOOK", title: "A Book", mode: "stopwatch", started: Date.now() - 3600e3, seconds: 1860, note: "ch. 3-4, the argument about coinage" },
-	{ id: "h2", libraryID: 1, itemKey: "BOOK", title: "A Book", mode: "pomodoro", started: Date.now() - 86400000, seconds: 3000 });
+// Two rows on two days, whatever the clock says. Offsets from now do not do
+// that: an hour ago and a day ago are the same calendar day if you run this
+// between midnight and one, and the two headers become one.
+I.log.push({ id: "h1", libraryID: 1, itemKey: "BOOK", title: "A Book", mode: "stopwatch", started: Date.now(), seconds: 1860, note: "ch. 3-4, the argument about coinage" },
+	{ id: "h2", libraryID: 1, itemKey: "BOOK", title: "A Book", mode: "pomodoro", started: startOfDay(Date.now()) - 1, seconds: 3000 });
 I.goals.push({ id: "g1", libraryID: 1, scope: "item", key: "BOOK", seconds: 7200, period: "total", updatedAt: Date.now() });
 
 const drawn = (body, cls) => body.children.filter((c) => c.className === cls).length;
