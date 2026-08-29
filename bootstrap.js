@@ -1579,7 +1579,8 @@ h1 { font-size:15px; margin:0; flex:1 0 100%; }  /* its own row inside .top */
 .more:hover { background:Highlight; color:HighlightText; }  /* stays right with no timer beside it */
 .live { display:flex; align-items:center; gap:6px; min-width:0; font-size:12px; }
 .live .t { font-variant-numeric:tabular-nums; white-space:nowrap; }
-.live .w { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:GrayText; }
+.live .w { min-width:0; max-width:min(340px, 40vw); overflow:hidden; text-overflow:ellipsis;
+	white-space:nowrap; color:GrayText; }   /* capped: .top wraps before it would shrink */
 .top button.on { background:Highlight; color:HighlightText; }
 .goal { margin:14px 0; }
 .picker { max-height:260px; overflow-y:auto; margin:8px 0; }
