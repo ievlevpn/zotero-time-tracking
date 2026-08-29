@@ -274,6 +274,37 @@ function addRow(item, mode, seconds, started = Date.now()) {
 	return row;
 }
 
+// Feed reading belongs to no single item: skimming a deck is one sitting, and
+// most of what it touches you discarded rather than kept. So it logs against a
+// stand-in target. The log only ever reads these three off whatever it is given,
+// and every later lookup by key is null-guarded, so a key no item has costs
+// nothing. Lowercase, which a real eight-character Zotero key can never be.
+const FEEDS = {
+	get libraryID() { return Zotero.Libraries.userLibraryID; },
+	key: "feeds",
+	getDisplayTitle: () => "Feed reading",
+};
+
+// What other plugins may call, published on Zotero as `Zotero.ReadingTime` and
+// deleted again on shutdown — a global left behind is a live function in a dead
+// scope, which hangs whoever calls it. Callers feature-detect the function they
+// want and carry on without it: we are an optional extra, never a dependency.
+const API = {
+	apiVersion: 1,
+	// Time measured by someone else, banked in one go rather than ticked here.
+	// Whoever did the measuring knows what counts — a riffle deck pauses when
+	// you walk away, which a clock in this process cannot see. Returns whether
+	// the session was kept; short ones are dropped, exactly as a timer's are.
+	addFeedSession(seconds, started = Date.now()) {
+		return safe(() => {
+			if (!db || !(seconds >= MIN_SESSION)) return false;
+			addRow(FEEDS, "feed", seconds, started);
+			refreshViews();
+			return true;
+		}, false);
+	},
+};
+
 function saveRow(row) {
 	if (!db) return;   // nothing to write to; the in-memory log still has it
 	db.queryAsync("UPDATE sessions SET seconds = ?, title = ?, note = ? WHERE id = ?",
@@ -2239,6 +2270,7 @@ function buildHistory(win) {
 		all.addEventListener("click", () => { historyFilter = null; safe(() => buildHistory(win)); });
 		nav.append(all);
 	}
+	if (historyView === "days") nav.append(dayPicker(doc, win, historyByDay(rows)));
 	for (const [id, label] of [["days", "Days"], ["collections", "Collections"], ["goals", "Goals"]]) {
 		const tab = el(doc, "button", historyView === id ? "on" : null, label);
 		tab.addEventListener("click", () => { historyView = id; safe(() => buildHistory(win)); });
@@ -2251,7 +2283,6 @@ function buildHistory(win) {
 	} else {
 		historyTick = () => { if (timer) buildHistory(win); };   // one started elsewhere
 	}
-	if (historyView === "days") nav.append(dayPicker(doc, win, historyByDay(rows)));
 	head.append(nav);
 	doc.body.replaceChildren(head);
 
@@ -2338,6 +2369,7 @@ function buildHistory(win) {
 // background — until it lands, `db` is null and every writer bails.
 function startup({ id }) {
 	active = true;
+	Zotero.ReadingTime = API;
 	// Before any of the registrations below: everything they put on screen is
 	// labelled from the .ftl, and an element added before the file is there
 	// stays blank.
@@ -2454,6 +2486,7 @@ async function shutdown() {
 	// Order matters: stopping the clock cannot be left to code that might throw
 	// on the way there, or the old instance keeps ticking and redrawing.
 	active = false;
+	if (Zotero.ReadingTime === API) delete Zotero.ReadingTime;
 	if (ticker) { clearInterval(ticker); ticker = null; }
 	safe(stop);
 	safe(closePanel);
@@ -2497,5 +2530,6 @@ if (typeof module !== "undefined") {
 		commitGoal, toggleComplete, applyReadTag, checkGoals,
 		setActive: (v) => { active = v; }, setDB: (v) => { db = v; }, getTimer: () => timer,
 		setRegistered: (col, row) => { columnKey = col; infoRowID = row; },
+		API,
 	};
 }

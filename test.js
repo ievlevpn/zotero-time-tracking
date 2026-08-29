@@ -749,4 +749,19 @@ I.getTimer().counted = 60;
 I.stop();
 assert.strictEqual(I.log.length, 2, "and a full minute is kept on its own");
 
+// (7) The published API: time another plugin measured, banked against the
+// stand-in feed target rather than any item. Same one-minute floor.
+global.Zotero.Libraries = { userLibraryID: 1 };
+I.log.length = 0;
+assert.strictEqual(I.API.addFeedSession(30), false, "a half-minute deck is not kept");
+assert.strictEqual(I.log.length, 0);
+assert.strictEqual(I.API.addFeedSession(900, 1000), true, "a quarter-hour deck is");
+assert.deepStrictEqual(
+	(({ libraryID, itemKey, title, mode, started, seconds }) =>
+		({ libraryID, itemKey, title, mode, started, seconds }))(I.log[0]),
+	{ libraryID: 1, itemKey: "feeds", title: "Feed reading", mode: "feed", started: 1000, seconds: 900 });
+
+I.setDB(null);
+assert.strictEqual(I.API.addFeedSession(900), false, "nothing to write to, nothing kept");
+
 console.log("ok");

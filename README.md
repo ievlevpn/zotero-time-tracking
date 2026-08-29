@@ -192,6 +192,32 @@ a time log should never be able to interrupt Zotero. Back it up yourself if you
 care about it. Zotero holds the file open while it runs, so read it with
 `sqlite3 -readonly`, or close Zotero first.
 
+## For other plugins
+
+While it runs, the plugin publishes one function on `Zotero`:
+
+```js
+Zotero.ReadingTime.addFeedSession(seconds, started)   // apiVersion 1
+```
+
+It banks time *someone else* measured — a whole sitting in one go — against a
+stand-in target rather than any item, and shows up in the history as a single
+**Feed reading** row. Sittings under a minute are dropped, exactly as a timer's
+are; the return value says whether it was kept.
+
+Check for it at the moment you call it, never at startup:
+
+```js
+const rt = Zotero.ReadingTime;
+if (rt && rt.apiVersion === 1) rt.addFeedSession(900, Date.now() - 900e3);
+```
+
+Plugins load in any order, and the object is withdrawn again on shutdown — a
+reference kept from earlier can be a function whose scope has since been
+deleted, which hangs whoever calls it. [Feed
+Riffle](https://github.com/ievlevpn/zotero-feed-riffle) uses this to log a
+riffling session; nothing else is expected to.
+
 ## Compatibility
 
 `manifest.json` declares `strict_min_version: "9.999"` rather than `"10.0"`.
