@@ -176,6 +176,7 @@ async function openDB() {
 	}
 	if (!active) return closeDB();   // shut down while we were opening
 	db = conn;                       // only now can anything else use it
+	safe(splitOldOvernights);        // one-off repair of sessions logged before the cut existed
 	refreshViews();
 	paint();
 }
@@ -258,6 +259,37 @@ function sumSeconds(rows, { since = 0, id = null } = {}) {
 }
 
 const startOfDay = (ms) => { const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime(); };
+// Walked with setDate() rather than adding 86400000, so the clocks going back
+// doesn't put two midnights in one day or skip the one after they go forward.
+const nextMidnight = (ms) => {
+	const d = new Date(ms);
+	d.setHours(0, 0, 0, 0);
+	d.setDate(d.getDate() + 1);
+	return d.getTime();
+};
+
+// Where a row's span crosses midnight, and how it divides. A session records
+// when it began and how much time it counted, never a minute-by-minute trace,
+// so the only reading available is the plain one: it ran from `started` for
+// `seconds` without a gap. Returns the pieces in order, or null for a row that
+// sits inside one day — and null too when a cut would leave a scrap under the
+// session floor, because that is exactly where the plain reading is least
+// trustworthy and the scrap would be beneath keeping anywhere else.
+function cutAtMidnights(row) {
+	if (!(row.seconds >= MIN_SESSION)) return null;   // glances and manual subtractions stay put
+	const pieces = [];
+	let started = row.started, left = row.seconds;
+	while (started + left * 1000 > nextMidnight(started)) {
+		const head = Math.round((nextMidnight(started) - started) / 1000);
+		pieces.push({ started, seconds: head });
+		left -= head;
+		started = nextMidnight(started);
+	}
+	if (!pieces.length) return null;
+	pieces.push({ started, seconds: left });
+	return pieces.some((p) => p.seconds < MIN_SESSION) ? null : pieces;
+}
+
 
 const totalFor = (item) => (item ? sumSeconds(log, { id: idOf(item) }) : 0);
 
@@ -417,7 +449,55 @@ function absorb() {
 		timer.phaseElapsed += d;
 		if (timer.phase === "focus") timer.counted += d;  // breaks don't count
 	}
-	timer.row.seconds = Math.round(timer.counted);
+	// ponytail: clamped rather than reconciled — a check-in that trims the sitting
+	// below what a previous day already banked shrinks today's row to nothing and
+	// leaves yesterday's alone, which is the reading that needs no extra state.
+	timer.row.seconds = Math.round(Math.max(0, timer.counted - timer.rowBase));
+}
+
+// A sitting that runs through midnight belongs to both days. Close the row at
+// the boundary and open the next one there, so neither day borrows the other's
+// time. Only the row being written right now is ever touched: everything
+// already logged keeps the day it was filed under, so old cross-midnight
+// sessions read exactly as they always have and nothing needs migrating.
+function splitAtMidnight() {
+	const midnight = startOfDay(Date.now());
+	if (!timer || timer.row.started >= midnight) return;
+	const prev = timer.row;
+	// The same floor stop() uses: a fragment of a minute either side of midnight
+	// is noise, and a note means someone thought it was worth keeping anyway.
+	if (prev.seconds < MIN_SESSION && !prev.note) dropRow(prev);
+	else saveRow(prev);
+	// A stand-in for the item, which may not be in Zotero's cache at 4am — the
+	// log only ever reads these three off whatever it is handed.
+	timer.row = addRow({ libraryID: prev.libraryID, key: prev.itemKey, getDisplayTitle: () => prev.title },
+		timer.mode, 0, midnight);
+	timer.rowBase = timer.counted;
+	refreshViews();
+}
+
+// The same cut, for sessions logged before the timer knew to make it: a night's
+// reading sat entirely on the day it began, so the morning after showed nothing.
+// Idempotent — a pass leaves no row crossing a boundary, so every later startup
+// finds nothing to do and writes nothing.
+function splitOldOvernights() {
+	if (!db) return 0;
+	let cut = 0;
+	for (const row of log.slice()) {
+		const pieces = cutAtMidnights(row);
+		if (!pieces) continue;
+		row.seconds = pieces[0].seconds;   // pieces[0] starts where the row already did
+		saveRow(row);
+		// A stand-in for the item: the log only reads these three off what it is
+		// handed, and a years-old session's item may be gone from the library.
+		const stub = { libraryID: row.libraryID, key: row.itemKey, getDisplayTitle: () => row.title };
+		for (const p of pieces.slice(1)) addRow(stub, row.mode, p.seconds, p.started, null);
+		cut++;
+	}
+	// The log is loaded in started order and the new halves were appended; put it
+	// back, so a day's sessions still read down the page in the order they ran.
+	if (cut) log.sort((a, b) => a.started - b.started);
+	return cut;
 }
 
 // One timer, ever: two running at once would double-count the same stretch of
@@ -432,7 +512,7 @@ function start(mode, item) {
 	if (timer) stop();  // flush the old one first
 	timer = {
 		id: idOf(item), mode, row: addRow(item, mode, 0), capAt: CHECK_IN,
-		counted: 0, running: true, segStart: Date.now(),
+		counted: 0, rowBase: 0, running: true, segStart: Date.now(),
 		phase: "focus", phaseElapsed: 0,
 	};
 	ticks = 0;
@@ -494,6 +574,7 @@ function tick() {
 	safe(absorb);
 	if (ticks % ORPHAN_EVERY === 0) safe(checkOrphaned);
 	if (!timer) return paint();   // the check may have stopped it
+	safe(splitAtMidnight);
 	// Each step can drop the timer (a check-in answered with "stop"), so re-test
 	// it — and reach paint() no matter which of them did what.
 	if (timer && timer.running && timer.counted >= timer.capAt) askCheckIn();
@@ -2519,12 +2600,12 @@ function uninstall() {}
 
 // node-only: lets test.js import the pure helpers; no-op inside Zotero.
 if (typeof module !== "undefined") {
-	module.exports = { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, historyByDay, heatmapWeeks, streaks, level, rollUp, fuzzy, periodStart, goalProgress, goalPace, canComplete, goalDone };
+	module.exports = { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, cutAtMidnights, historyByDay, heatmapWeeks, streaks, level, rollUp, fuzzy, periodStart, goalProgress, goalPace, canComplete, goalDone };
 	// Enough of the machinery for test.js to drive a whole session. A smoke test
 	// is what catches an edit that quietly deletes a function everything calls.
 	module.exports.__internals = {
 		start, stop, tick, paint, setPaused, nextPhase, checkOrphaned, buildHistory, openPanel, closePanel,
-		reparentRows, idFor, readerOpenFor, adoptOpenNotes, shutdown, log, goals, bars,
+		reparentRows, splitOldOvernights, idFor, readerOpenFor, adoptOpenNotes, shutdown, log, goals, bars,
 		setView: (v) => { historyView = v; },
 		setPick: (v) => { goalPick = v; },
 		toggleRead, autoMini,

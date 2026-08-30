@@ -282,8 +282,11 @@ folder, then restart Zotero.
 - **No idle detection.** The stopwatch keeps counting if you walk away — pause
   it, or use the pomodoro. Machine sleep isn't counted (gaps over 5 s are
   ignored).
-- A session is attributed to the day it *started*, so one that runs past
-  midnight counts toward the previous day.
+- A session that runs past midnight is cut at the boundary into one row per
+  day, so neither day borrows the other's time. Sessions logged before 0.36.0
+  are cut on first startup, worked out from when each began and how long it
+  ran — a row that was paused across midnight may divide in the wrong place,
+  since the log never recorded where the pause fell.
 - The DB is written every 60 s and on every pause/stop/phase change, so a crash
   costs at most a minute.
 - Versions before 0.2.0 stored the total in the item's **Extra** field. Those

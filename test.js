@@ -1,6 +1,6 @@
 // Self-check for the pure helpers and the machinery: `node test.js`.
 const assert = require("assert");
-const { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, historyByDay, heatmapWeeks, streaks, level, rollUp, fuzzy, periodStart, goalProgress, goalPace, canComplete, goalDone } = require("./bootstrap.js");
+const { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, cutAtMidnights, historyByDay, heatmapWeeks, streaks, level, rollUp, fuzzy, periodStart, goalProgress, goalPace, canComplete, goalDone } = require("./bootstrap.js");
 
 // A bare number means minutes; h/m/s are honoured; junk is ignored.
 assert.strictEqual(parseDuration("25"), 1500);
@@ -258,6 +258,65 @@ assert.strictEqual(I.log.length, 1, "the session is kept, not dropped");
 assert.strictEqual(I.log[0].seconds, 120, "with its time intact");
 assert.ok(refreshes > 0, "the column and item pane get refreshed");
 assert.ok(written.includes("UPDATE"), "the final duration is written");
+
+// Reading through midnight files the sitting under both days: the row so far is
+// closed at the boundary and a new one opens there. Backdating the running row
+// is what the clock does at 00:00, without having to wait until 00:00 to find
+// out. Nothing already in the log is touched, which is why no old record moves.
+openReaders = [{ itemID: 10 }];
+I.log.length = 0;
+I.start("stopwatch", book);
+const overnight = I.getTimer().row;
+overnight.started = startOfDay(Date.now()) - 3600e3;   // began an hour before midnight
+I.getTimer().counted = 1800;                           // half an hour of it counted
+I.tick();
+assert.strictEqual(I.log.length, 2, "midnight cuts the sitting in two");
+assert.strictEqual(I.log[0], overnight, "the first half keeps its own row");
+assert.strictEqual(overnight.seconds, 1800, "yesterday keeps what it had at midnight");
+assert.strictEqual(I.log[1].started, startOfDay(Date.now()), "the new row starts at midnight");
+assert.strictEqual(I.log[1].itemKey, "BOOK", "and against the same item");
+assert.strictEqual(I.log[1].seconds, 0, "with nothing in it yet");
+I.getTimer().counted = 2100;                           // five more minutes, after midnight
+I.tick();
+assert.strictEqual(I.log[1].seconds, 300, "later time lands on the new day alone");
+assert.strictEqual(overnight.seconds, 1800, "never back on the old row");
+assert.strictEqual(I.log.length, 2, "one cut per midnight, not one per tick");
+I.stop();
+assert.strictEqual(I.log.length, 2, "stopping keeps both halves");
+
+// Sessions logged before the cut existed get the same treatment on startup,
+// worked out from what a row actually records: when it began and how long it
+// ran. A row inside one day is left exactly as it is.
+const midday = startOfDay(Date.now()) + 12 * 3600e3;
+assert.strictEqual(cutAtMidnights({ started: midday, seconds: 3600 }), null, "a daytime session is not cut");
+assert.strictEqual(cutAtMidnights({ started: midday, seconds: 30 }), null, "nor is a glance");
+assert.strictEqual(cutAtMidnights({ started: midday, seconds: -600 }), null, "nor a manual subtraction");
+// Half an hour either side of midnight, from 23:30.
+const lateEve = startOfDay(Date.now()) - 1800e3;
+assert.deepStrictEqual(cutAtMidnights({ started: lateEve, seconds: 3600 }),
+	[{ started: lateEve, seconds: 1800 }, { started: startOfDay(Date.now()), seconds: 1800 }],
+	"a sitting across midnight divides at the boundary");
+// 23:59:30 plus two minutes: the scrap before midnight is under the floor, so
+// guessing where it fell is worse than leaving the row alone.
+assert.strictEqual(cutAtMidnights({ started: startOfDay(Date.now()) - 30e3, seconds: 120 }), null,
+	"a cut that would leave a scrap is not made");
+// A marathon spanning three days comes back in three.
+const marathon = cutAtMidnights({ started: lateEve, seconds: 3 * 86400 });
+assert.strictEqual(marathon.length, 4, "every midnight in the span is a cut");
+assert.strictEqual(marathon.reduce((t, p) => t + p.seconds, 0), 3 * 86400, "and no time is lost or invented");
+
+// The repair itself: it rewrites the crossing row and adds the other half, and
+// running it twice changes nothing the second time.
+I.log.length = 0;
+I.log.push({ id: "old", libraryID: 1, itemKey: "BOOK", title: "A Book", mode: "stopwatch",
+	started: lateEve, seconds: 3600, note: "the late chapters" });
+assert.strictEqual(I.splitOldOvernights(), 1, "one old session needed cutting");
+assert.strictEqual(I.log.length, 2, "and became two");
+assert.deepStrictEqual(I.log.map((r) => r.seconds), [1800, 1800], "split down the middle");
+assert.strictEqual(I.log[0].note, "the late chapters", "the note stays with the half it was typed in");
+assert.strictEqual(I.log[1].title, "A Book", "the new half keeps the item and its title");
+assert.strictEqual(I.splitOldOvernights(), 0, "a second pass finds nothing left to cut");
+assert.strictEqual(I.log.length, 2, "and writes nothing");
 
 // The only failures the run may swallow are the cache misses we staged.
 assert.deepStrictEqual([...new Set(logged.map((e) => e.name))].sort(), ["UnloadedDataException"],
