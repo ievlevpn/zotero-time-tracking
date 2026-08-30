@@ -283,7 +283,7 @@ folder, then restart Zotero.
   it, or use the pomodoro. Machine sleep isn't counted (gaps over 5 s are
   ignored).
 - A session that runs past midnight is cut at the boundary into one row per
-  day, so neither day borrows the other's time. Sessions logged before 0.36.0
+  day, so neither day borrows the other's time. Sessions logged before 0.37.0
   are cut on first startup, worked out from when each began and how long it
   ran — a row that was paused across midnight may divide in the wrong place,
   since the log never recorded where the pause fell.
