@@ -259,6 +259,15 @@ function sumSeconds(rows, { since = 0, id = null } = {}) {
 }
 
 const startOfDay = (ms) => { const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime(); };
+// The calendar date <input type="date"> wants, read off the local clock.
+// toISOString() would answer in UTC, and a deadline stored as local midnight is
+// the day before in UTC anywhere east of it — so reopening a goal showed
+// yesterday, and saving again walked the deadline back a day each time.
+const isoDay = (ms) => {
+	const d = new Date(ms);
+	const p = (n) => String(n).padStart(2, "0");
+	return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
 // Walked with setDate() rather than adding 86400000, so the clocks going back
 // doesn't put two midnights in one day or skip the one after they go forward.
 const nextMidnight = (ms) => {
@@ -276,7 +285,11 @@ const nextMidnight = (ms) => {
 // session floor, because that is exactly where the plain reading is least
 // trustworthy and the scrap would be beneath keeping anywhere else.
 function cutAtMidnights(row) {
-	if (!(row.seconds >= MIN_SESSION)) return null;   // glances and manual subtractions stay put
+	if (!(row.seconds >= MIN_SESSION)) return null;   // glances and subtractions stay put
+	// A manual entry records when it was *typed*, not when the reading happened,
+	// so its span means nothing: "8h" entered at 20:00 is a claim about the day,
+	// not about the four hours after midnight. Nothing to divide honestly.
+	if (row.mode === "manual") return null;
 	const pieces = [];
 	let started = row.started, left = row.seconds;
 	while (started + left * 1000 > nextMidnight(started)) {
@@ -952,7 +965,8 @@ function openPanel(reader, doc, btn) {
 // second one floating over the page would only be in the way.
 const mainAnchor = { corner: true, getBoundingClientRect: () => ({ bottom: 0, left: 0 }) };
 let miniFolded = true;      // a line with the time; unfold for the whole panel
-let miniDismissed = null;   // the session ✕ was pressed for
+let miniDismissed = null;   // the timer ✕ was pressed for — the timer object, not
+                            // its row, which midnight replaces underneath it
 
 // Called from paint(), so it settles within a second of anything changing —
 // a timer starting or stopping, or a tab being switched.
@@ -980,7 +994,7 @@ function backToTimed(win, item) {
 
 function autoMini() {
 	const win = Zotero.getMainWindow();
-	const want = !!win && !!timer && miniDismissed !== timer.row && !onTimedTab(win);
+	const want = !!win && !!timer && miniDismissed !== timer && !onTimedTab(win);
 	const have = !!panel && panel.btn === mainAnchor;
 	// A popup someone actually asked for outranks this one: it gets the slot
 	// until it is closed, and the clock comes back after.
@@ -1012,7 +1026,7 @@ function miniHead(doc, item, rebuild) {
 	shut.title = "Hide until the next session";
 	fold.addEventListener("click", () => safe(() => { miniFolded = !miniFolded; rebuild(); }));
 	shut.addEventListener("click", () => safe(() => {
-		miniDismissed = timer && timer.row;
+		miniDismissed = timer;
 		closePanel();
 	}));
 	head.append(live, back, fold, shut);
@@ -1905,7 +1919,10 @@ function editSession(win, r) {
 		fmtTotal(r.seconds) || "0s");
 	if (answer === null) return;
 	const sec = Math.round(parseDuration(answer));
-	if (sec <= 0) dropRow(r);
+	// Only an explicit zero deletes, as the prompt says. `<= 0` also swallowed
+	// every manual subtraction: its own prefill parses back to a negative, so
+	// confirming the dialog unchanged deleted the row it was meant to leave alone.
+	if (sec === 0) dropRow(r);
 	else { r.seconds = sec; saveRow(r); }
 	refreshViews();
 	paint();
@@ -1989,7 +2006,7 @@ function goalEditor(doc, win) {
 	const by = doc.createElement("input");
 	by.type = "date";
 	by.title = "Deadline (optional)";
-	if (goalDraft.deadline) by.value = new Date(goalDraft.deadline).toISOString().slice(0, 10);
+	if (goalDraft.deadline) by.value = isoDay(goalDraft.deadline);
 	const period = periodPicker(doc, goalDraft.period, (v) => { by.hidden = v !== "total"; });
 	by.hidden = period.value !== "total";
 
@@ -2600,7 +2617,7 @@ function uninstall() {}
 
 // node-only: lets test.js import the pure helpers; no-op inside Zotero.
 if (typeof module !== "undefined") {
-	module.exports = { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, cutAtMidnights, historyByDay, heatmapWeeks, streaks, level, rollUp, fuzzy, periodStart, goalProgress, goalPace, canComplete, goalDone };
+	module.exports = { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, isoDay, cutAtMidnights, historyByDay, heatmapWeeks, streaks, level, rollUp, fuzzy, periodStart, goalProgress, goalPace, canComplete, goalDone };
 	// Enough of the machinery for test.js to drive a whole session. A smoke test
 	// is what catches an edit that quietly deletes a function everything calls.
 	module.exports.__internals = {
@@ -2610,7 +2627,7 @@ if (typeof module !== "undefined") {
 		setPick: (v) => { goalPick = v; },
 		toggleRead, autoMini,
 		setFolded: (v) => { miniFolded = v; },
-		commitGoal, toggleComplete, applyReadTag, checkGoals,
+		commitGoal, toggleComplete, applyReadTag, checkGoals, editSession, splitAtMidnight,
 		setActive: (v) => { active = v; }, setDB: (v) => { db = v; }, getTimer: () => timer,
 		setRegistered: (col, row) => { columnKey = col; infoRowID = row; },
 		API,

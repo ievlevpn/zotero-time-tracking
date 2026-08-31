@@ -1,6 +1,6 @@
 // Self-check for the pure helpers and the machinery: `node test.js`.
 const assert = require("assert");
-const { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, cutAtMidnights, historyByDay, heatmapWeeks, streaks, level, rollUp, fuzzy, periodStart, goalProgress, goalPace, canComplete, goalDone } = require("./bootstrap.js");
+const { parseDuration, fmtTotal, fmtClock, sortKey, sumSeconds, startOfDay, isoDay, cutAtMidnights, historyByDay, heatmapWeeks, streaks, level, rollUp, fuzzy, periodStart, goalProgress, goalPace, canComplete, goalDone } = require("./bootstrap.js");
 
 // A bare number means minutes; h/m/s are honoured; junk is ignored.
 assert.strictEqual(parseDuration("25"), 1500);
@@ -291,6 +291,10 @@ const midday = startOfDay(Date.now()) + 12 * 3600e3;
 assert.strictEqual(cutAtMidnights({ started: midday, seconds: 3600 }), null, "a daytime session is not cut");
 assert.strictEqual(cutAtMidnights({ started: midday, seconds: 30 }), null, "nor is a glance");
 assert.strictEqual(cutAtMidnights({ started: midday, seconds: -600 }), null, "nor a manual subtraction");
+// A manual entry's `started` is when it was typed. "8h" logged at 20:00 is a
+// claim about the day, not about the four hours after midnight.
+assert.strictEqual(cutAtMidnights({ started: startOfDay(Date.now()) - 4 * 3600e3, seconds: 8 * 3600, mode: "manual" }),
+	null, "nor a manual entry, whose span means nothing");
 // Half an hour either side of midnight, from 23:30.
 const lateEve = startOfDay(Date.now()) - 1800e3;
 assert.deepStrictEqual(cutAtMidnights({ started: lateEve, seconds: 3600 }),
@@ -317,6 +321,13 @@ assert.strictEqual(I.log[0].note, "the late chapters", "the note stays with the 
 assert.strictEqual(I.log[1].title, "A Book", "the new half keeps the item and its title");
 assert.strictEqual(I.splitOldOvernights(), 0, "a second pass finds nothing left to cut");
 assert.strictEqual(I.log.length, 2, "and writes nothing");
+
+// The date a <input type="date"> is given must be the local one. Read in UTC, a
+// deadline stored as local midnight comes back as the day before anywhere east
+// of Greenwich, and saving the editor again walks it back another day.
+const deadline = new Date(2026, 8, 10, 0, 0, 0).getTime();   // 10 Sep 2026, local midnight
+assert.strictEqual(isoDay(deadline), "2026-09-10", "a deadline redisplays on the day it was set");
+assert.strictEqual(new Date(isoDay(deadline) + "T00:00:00").getTime(), deadline, "and round-trips unchanged");
 
 // The only failures the run may swallow are the cache misses we staged.
 assert.deepStrictEqual([...new Set(logged.map((e) => e.name))].sort(), ["UnloadedDataException"],
@@ -762,6 +773,12 @@ inMini().find((n) => n.textContent === "✕").listeners.click.forEach((fn) => fn
 assert.strictEqual(mini().length, 0, "✕ hides it");
 I.autoMini();
 assert.strictEqual(mini().length, 0, "and it stays hidden for that session");
+// Hidden means hidden for the sitting, not until the next midnight — which
+// hands the timer a brand-new row and would defeat an identity check on it.
+I.getTimer().row.started = startOfDay(Date.now()) - 3600e3;
+I.splitAtMidnight();
+I.autoMini();
+assert.strictEqual(mini().length, 0, "midnight swapping its row underneath does not un-hide it");
 
 I.stop();
 I.start("stopwatch", book);
@@ -822,6 +839,21 @@ assert.deepStrictEqual(
 	(({ libraryID, itemKey, title, mode, started, seconds }) =>
 		({ libraryID, itemKey, title, mode, started, seconds }))(I.log[0]),
 	{ libraryID: 1, itemKey: "feeds", title: "Feed reading", mode: "feed", started: 1000, seconds: 900 });
+
+// Editing a session offers its current duration and says "0 deletes it". A
+// manual subtraction prefills as "-10m", so anything that reads a negative as
+// "delete" throws the row away the moment the dialog is confirmed unchanged.
+global.Services.prompt.prompt = (win, title, text, out) => true;   // keep the prefill
+I.log.length = 0;
+const subtraction = { id: "m1", libraryID: 1, itemKey: "BOOK", title: "A Book", mode: "manual",
+	started: midday, seconds: -600, note: null };
+I.log.push(subtraction);
+I.editSession({ document: fakeDoc() }, subtraction);
+assert.strictEqual(I.log.length, 1, "confirming the prefill keeps the subtraction");
+assert.strictEqual(subtraction.seconds, -600, "at the value it already had");
+global.Services.prompt.prompt = (win, title, text, out) => { out.value = "0"; return true; };
+I.editSession({ document: fakeDoc() }, subtraction);
+assert.strictEqual(I.log.length, 0, "and a typed zero still deletes it");
 
 I.setDB(null);
 assert.strictEqual(I.API.addFeedSession(900), false, "nothing to write to, nothing kept");

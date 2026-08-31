@@ -286,7 +286,8 @@ folder, then restart Zotero.
   day, so neither day borrows the other's time. Sessions logged before 0.37.0
   are cut on first startup, worked out from when each began and how long it
   ran — a row that was paused across midnight may divide in the wrong place,
-  since the log never recorded where the pause fell.
+  since the log never recorded where the pause fell. Manual entries are left
+  whole: their timestamp is when you typed them, not when you read.
 - The DB is written every 60 s and on every pause/stop/phase change, so a crash
   costs at most a minute.
 - Versions before 0.2.0 stored the total in the item's **Extra** field. Those
