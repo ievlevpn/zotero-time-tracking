@@ -2037,6 +2037,18 @@ function goalDone(g, done) {
 	return g.period === "total" && (!!g.completedAt || done >= g.seconds);
 }
 
+// Open the book rather than point at it — the same thing a double-click in the
+// library does: the best attachment in a reader tab, the editor for a note.
+// selectItem first, because that is where you land when the tab is closed, and
+// it is the whole answer for an item with nothing attached to open.
+function openItem(main, itemID) {
+	main.ZoteroPane.selectItem(itemID);
+	const item = safe(() => Zotero.Items.get(itemID), null);
+	// Contained: a rejection needs catching separately from a throw, and if this
+	// Zotero has no viewItems at all the click still selected the item above.
+	if (item) safe(() => Promise.resolve(main.ZoteroPane.viewItems([item])).catch(oops));
+}
+
 // Take me to the thing this goal is about.
 function reveal(g) {
 	safe(() => {
@@ -2047,7 +2059,7 @@ function reveal(g) {
 			if (collection) main.ZoteroPane.collectionsView.selectCollection(collection.id);
 		} else {
 			const itemID = Zotero.Items.getIDFromLibraryAndKey(g.libraryID, g.key);
-			if (itemID) main.ZoteroPane.selectItem(itemID);
+			if (itemID) openItem(main, itemID);
 		}
 		main.focus();
 	});
@@ -2063,7 +2075,7 @@ function goalRow(doc, win, g, now) {
 	const title = el(doc, "span", "t", name || "(deleted)");
 	if (name && g.scope !== "all") {
 		title.className = "t link";
-		title.title = g.scope === "collection" ? "Show this collection" : "Show this book";
+		title.title = g.scope === "collection" ? "Show this collection" : "Open this book";
 		title.addEventListener("click", () => reveal(g));
 	}
 	head.append(title,
@@ -2427,12 +2439,12 @@ function buildHistory(win) {
 				el(doc, "b", null, fmtTotal(e.seconds) || "0m"));
 			row.title = "Show this day's sessions";
 			const show = el(doc, "button", null, "↗");
-			show.title = "Show in library";
+			show.title = "Open this item";
 			show.addEventListener("click", (ev) => safe(() => {
 				ev.stopPropagation();
 				const itemID = Zotero.Items.getIDFromLibraryAndKey(e.libraryID, e.itemKey);
 				if (!itemID) return;
-				main.ZoteroPane.selectItem(itemID);
+				openItem(main, itemID);
 				main.focus();
 			}));
 			row.append(show);
@@ -2625,7 +2637,7 @@ if (typeof module !== "undefined") {
 		reparentRows, splitOldOvernights, idFor, readerOpenFor, adoptOpenNotes, shutdown, log, goals, bars,
 		setView: (v) => { historyView = v; },
 		setPick: (v) => { goalPick = v; },
-		toggleRead, autoMini,
+		toggleRead, autoMini, reveal,
 		setFolded: (v) => { miniFolded = v; },
 		commitGoal, toggleComplete, applyReadTag, checkGoals, editSession, splitAtMidnight,
 		setActive: (v) => { active = v; }, setDB: (v) => { db = v; }, getTimer: () => timer,
