@@ -2039,14 +2039,14 @@ function goalDone(g, done) {
 
 // Open the book rather than point at it — the same thing a double-click in the
 // library does: the best attachment in a reader tab, the editor for a note.
-// selectItem first, because that is where you land when the tab is closed, and
-// it is the whole answer for an item with nothing attached to open.
+// Opening is the whole job. A selectItem alongside it only fought this: it is
+// async, so it finished *after* the tab had opened and pulled the pane back to
+// the library, which is the one place you were not asking to go.
 function openItem(main, itemID) {
-	main.ZoteroPane.selectItem(itemID);
 	const item = safe(() => Zotero.Items.get(itemID), null);
-	// Contained: a rejection needs catching separately from a throw, and if this
-	// Zotero has no viewItems at all the click still selected the item above.
-	if (item) safe(() => Promise.resolve(main.ZoteroPane.viewItems([item])).catch(oops));
+	if (!item) return;
+	// Contained: a rejection needs catching separately from a throw.
+	safe(() => Promise.resolve(main.ZoteroPane.viewItems([item])).catch(oops));
 }
 
 // Take me to the thing this goal is about.

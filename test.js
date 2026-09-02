@@ -426,9 +426,8 @@ assert.strictEqual(notes.length, 2, "every session has a note line");
 assert.ok(notes.some((n) => n.textContent.includes("coinage")), "the written note is shown");
 assert.ok(notes.some((n) => n.className.includes("snote-blank")), "an unwritten one is an invitation, not a blank");
 
-// ↗ opens the book, rather than only pointing at it in the library. The select
-// stays: it is where you land when the reader tab is closed, and the whole
-// answer for an item with nothing attached to open.
+// ↗ opens the book, and only opens it. A selectItem alongside is async, so it
+// lands after the tab has opened and drags the pane back to the library.
 const arrows = [];
 const findArrows = (n) => { if (n.textContent === "↗") arrows.push(n); (n.children || []).forEach(findArrows); };
 doc.body.children.forEach(findArrows);
@@ -436,7 +435,7 @@ assert.ok(arrows.length, "every item row offers the arrow");
 paneCalls.select.length = paneCalls.view.length = 0;
 arrows[0].listeners.click.forEach((fn) => fn({ stopPropagation() {} }));
 assert.deepStrictEqual(paneCalls.view, [[1]], "the arrow opens the item");
-assert.deepStrictEqual(paneCalls.select, [1], "and selects it, so closing the tab lands somewhere");
+assert.deepStrictEqual(paneCalls.select, [], "and does not drag the library along behind it");
 
 // A goal's title is the same link.
 paneCalls.select.length = paneCalls.view.length = 0;
