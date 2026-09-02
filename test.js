@@ -395,13 +395,49 @@ I.goals.push(
 	{ id: "s1", libraryID: 1, scope: "item", key: "BOOK", seconds: 7200, period: "total", updatedAt: 1 },
 	{ id: "s2", libraryID: 1, scope: "collection", key: "COLL", seconds: 10800, period: "week", updatedAt: 1 },
 	{ id: "s3", libraryID: 1, scope: "all", key: null, seconds: 3600, period: "day", updatedAt: 1 },
-	{ id: "s4", libraryID: 1, scope: "item", key: "DONE", seconds: 3600, period: "total", completedAt: Date.now(), updatedAt: 1 });
+	// Three finished goals whose recency order is deliberately not their size
+	// order, so a pile sorted the old way fails instead of passing by luck.
+	{ id: "s4", libraryID: 1, scope: "item", key: "D1", seconds: 3600, period: "total", completedAt: 1000, updatedAt: 1 },
+	{ id: "s5", libraryID: 1, scope: "item", key: "D2", seconds: 7200, period: "total", completedAt: 9000, updatedAt: 1 },
+	{ id: "s6", libraryID: 1, scope: "item", key: "D3", seconds: 1800, period: "total", completedAt: 5000, updatedAt: 1 });
+
+// The fold state is a pref, so it needs somewhere to live before it is read.
+const goalPrefs = {};
+global.Zotero.Prefs = { get: (k) => goalPrefs[k], set: (k, v) => { goalPrefs[k] = v; } };
+
+const texts = (n, out = []) => { out.push(n.textContent || ""); (n.children || []).forEach((c) => texts(c, out)); return out; };
+const pileHeads = (d) => d.body.children.filter((c) => (c.className || "").startsWith("day"));
+const bodyUnder = (d, i) => d.body.children[d.body.children.indexOf(pileHeads(d)[i]) + 1];
+
 const piles = fakeDoc();
 I.setView("goals");
 I.buildHistory({ document: piles });
-const headers = piles.body.children.filter((c) => c.className === "day").map((c) => c.textContent);
-assert.deepStrictEqual(headers, ["All reading", "Books", "Collections", "Finished"],
-	"the goal covering everything leads; finished ones go last");
+const headers = pileHeads(piles).map((c) => c.children[0].textContent.slice(2));   // past the caret
+assert.deepStrictEqual(headers, ["All reading", "Collections", "Books", "Finished"],
+	"everything-wide leads, then collections over books, finished last");
+
+// Finished reads as a log: most recently closed on top, whatever its size.
+assert.deepStrictEqual(
+	bodyUnder(piles, 3).children.map((row) => texts(row).find((t) => /^\d+[hm] once$/.test(t))),
+	["2h once", "30m once", "1h once"],
+	"finished goals run newest first, not biggest first");
+
+// Finished starts folded — it is what is behind you, not what you came to read.
+assert.strictEqual(bodyUnder(piles, 3).hidden, true, "Finished starts folded");
+assert.strictEqual(bodyUnder(piles, 0).hidden, false, "the live piles do not");
+
+// And the choice is remembered, rather than reset every time the window opens.
+pileHeads(piles)[3].listeners.click.forEach((fn) => fn());
+assert.strictEqual(bodyUnder(piles, 3).hidden, false, "clicking the header unfolds it");
+const reopened = fakeDoc();
+I.buildHistory({ document: reopened });
+assert.strictEqual(bodyUnder(reopened, 3).hidden, false, "and reopening the window keeps it open");
+pileHeads(reopened)[1].listeners.click.forEach((fn) => fn());
+assert.strictEqual(goalPrefs["readingTime.foldedGoals"], "collection", "any pile can be folded away, and is");
+const again = fakeDoc();
+I.buildHistory({ document: again });
+assert.strictEqual(bodyUnder(again, 1).hidden, true, "Collections stays folded on the next open");
+global.Zotero.Prefs = { get: () => undefined, set: () => {} };   // as the rest of the run expects
 I.goals.length = 0;
 
 for (const view of ["days", "collections", "goals"]) {

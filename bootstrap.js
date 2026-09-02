@@ -22,6 +22,10 @@ const FOCUS_PREF = "readingTime.focusMin";
 // Three states on purpose: undefined = never asked, "" = asked and declined,
 // anything else = the tag to apply.
 const TAG_PREF = "readingTime.readTag";
+// Which goal piles are collapsed, comma-joined. Undefined means never touched,
+// which is where "Finished starts out of the way" comes from — it is a log of
+// what is behind you, not a list of what to do next.
+const FOLD_PREF = "readingTime.foldedGoals";
 const FOCUS_RANGE = [5, 120];
 
 const CHECK_IN = 3600;    // seconds of counted time between "still reading?" prompts
@@ -1480,6 +1484,12 @@ function toggleComplete(g) {
 
 const readTag = () => safe(() => Zotero.Prefs.get(TAG_PREF), undefined);
 
+function foldedPiles() {
+	const raw = safe(() => Zotero.Prefs.get(FOLD_PREF), undefined);
+	return new Set(String(raw === undefined ? "finished" : raw).split(",").filter(Boolean));
+}
+const saveFolds = (set) => safe(() => Zotero.Prefs.set(FOLD_PREF, [...set].join(",")));
+
 // Asked once, the first time you mark something read, and changeable from the
 // Goals view afterwards. Cancelling is taken as "no tag" so it isn't asked
 // again on every book — the setting is right there to change.
@@ -1667,6 +1677,8 @@ h1 { font-size:15px; margin:0; flex:1 0 100%; }  /* its own row inside .top */
 	border-radius:5px; background:transparent; color:CanvasText; cursor:pointer; }
 .top button:hover, .session button:hover { background:Highlight; color:HighlightText; }
 .item .caret { color:GrayText; font-size:9px; width:9px; }
+.day.fold { cursor:pointer; }
+.day.fold:hover { background:Highlight; color:HighlightText; }
 .coll { padding-left:10px; }
 .nav { display:flex; gap:4px; margin-left:auto; }
 .jump { position:relative; display:flex; }
@@ -2219,15 +2231,39 @@ function buildGoals(doc, win) {
 		(goalDone(g, done) ? finished : sections[g.scope]).push(g);
 	}
 
-	const pile = (title, list) => {
+	const folds = foldedPiles();
+	const pile = (key, title, list, order) => {
 		if (!list.length) return;
-		doc.body.append(el(doc, "div", "day", title));
-		for (const g of list.sort((a, b) => b.seconds - a.seconds)) doc.body.append(goalRow(doc, win, g, now));
+		let folded = folds.has(key);
+		const head = el(doc, "div", "day fold");
+		// Caret and title in one node: the whole label is rewritten on a toggle,
+		// which is less to keep in step than a caret that lives on its own.
+		const label = el(doc, "span");
+		const draw = () => { label.textContent = (folded ? "▸ " : "▾ ") + title; };
+		draw();
+		head.append(label, el(doc, "span", "rt-muted", String(list.length)));
+		const body = el(doc, "div");
+		body.hidden = folded;
+		for (const g of list.sort(order)) body.append(goalRow(doc, win, g, now));
+		head.addEventListener("click", () => safe(() => {
+			folded = !folded;
+			body.hidden = folded;
+			draw();
+			if (folded) folds.add(key); else folds.delete(key);
+			saveFolds(folds);
+		}));
+		doc.body.append(head, body);
 	};
-	pile("All reading", sections.all);   // the one that covers everything comes first
-	pile("Books", sections.item);
-	pile("Collections", sections.collection);
-	pile("Finished", finished);
+	const byTarget = (a, b) => b.seconds - a.seconds;
+	// Finished reads as a log, so newest first. A goal marked read carries the
+	// moment; one that simply reached its time carries only the save that
+	// recorded it, which is the same moment.
+	const closedAt = (g) => g.completedAt || g.notifiedAt || g.updatedAt || 0;
+	const byRecent = (a, b) => closedAt(b) - closedAt(a);
+	pile("all", "All reading", sections.all, byTarget);   // the one covering everything leads
+	pile("collection", "Collections", sections.collection, byTarget);
+	pile("item", "Books", sections.item, byTarget);
+	pile("finished", "Finished", finished, byRecent);
 }
 
 // Its own view rather than a block in the day list: collections answer a
