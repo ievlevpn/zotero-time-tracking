@@ -3,6 +3,7 @@
 	"name": "Reading Time",
 	"version": "0.38.0",
 	"description": "Tracks reading time per item: a stopwatch, a pomodoro timer and manual entry in the reader toolbar, totalled into a \"Reading time\" field.",
+	"homepage_url": "https://github.com/ievlevpn/zotero-time-tracking",
 	"author": "Pavel Ievlev",
 	"icons": {
 		"48": "icons/icon.svg",
@@ -13,7 +14,7 @@
 			"id": "reading-time@local",
 			"update_url": "https://raw.githubusercontent.com/ievlevpn/zotero-time-tracking/master/update.json",
 			"strict_min_version": "9.999",
-			"strict_max_version": "10.*"
+			"strict_max_version": "10.0.*"
 		}
 	}
 }
