@@ -1,7 +1,7 @@
 {
 	"manifest_version": 2,
 	"name": "Reading Time",
-	"version": "0.39.0",
+	"version": "0.39.1",
 	"description": "Tracks reading time per item: a stopwatch, a pomodoro timer and manual entry in the reader toolbar, totalled into a \"Reading time\" field.",
 	"homepage_url": "https://github.com/ievlevpn/zotero-time-tracking",
 	"author": "Pavel Ievlev",
