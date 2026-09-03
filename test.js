@@ -355,11 +355,14 @@ const fakeDoc = () => ({ defaultView: { innerWidth: 900 }, head: node("head"), b
 	createElement: node, getElementById: () => null, querySelectorAll: () => [],
 	addEventListener() {}, removeEventListener() {} });
 
-const paneCalls = { select: [], view: [] };
-global.Zotero.getMainWindow = () => ({ focus() {}, ZoteroPane: {
-	selectItem: (id) => paneCalls.select.push(id),
-	viewItems: (items) => { paneCalls.view.push(items.map((i) => i.id)); return Promise.resolve(); },
-} });
+const paneCalls = { select: [], view: [], collection: [], tab: [] };
+global.Zotero.getMainWindow = () => ({ focus() {},
+	Zotero_Tabs: { select: (id) => paneCalls.tab.push(id) },
+	ZoteroPane: {
+		selectItem: (id) => paneCalls.select.push(id),
+		viewItems: (items) => { paneCalls.view.push(items.map((i) => i.id)); return Promise.resolve(); },
+		collectionsView: { selectCollection: (id) => { paneCalls.collection.push(id); return Promise.resolve(); } },
+	} });
 global.Zotero.Items.getIDFromLibraryAndKey = () => 1;
 global.Zotero.Items.getByLibraryAndKey = () => book;
 global.Zotero.Collections = { get: () => null, getByLibraryAndKey: () => null };
@@ -477,6 +480,16 @@ assert.deepStrictEqual(paneCalls.select, [], "and does not drag the library alon
 paneCalls.select.length = paneCalls.view.length = 0;
 I.reveal({ libraryID: 1, scope: "item", key: "BOOK" });
 assert.deepStrictEqual(paneCalls.view, [[1]], "so is a goal's title");
+
+// A collection goal shows its collection — which means showing the library pane
+// too. Selecting a row in a tree that a reader tab is covering looks like
+// nothing happening at all, and reader tabs are what the other links open.
+global.Zotero.Collections.getByLibraryAndKey = () => ({ id: 77, name: "A Collection" });
+paneCalls.collection.length = paneCalls.tab.length = 0;
+I.reveal({ libraryID: 1, scope: "collection", key: "COLL" });
+assert.deepStrictEqual(paneCalls.collection, [77], "the collection is selected");
+assert.deepStrictEqual(paneCalls.tab, ["zotero-pane"], "and the pane holding it is brought to the front");
+global.Zotero.Collections.getByLibraryAndKey = () => null;
 
 // --- the note field belongs to the running session -------------------------
 // Clicking outside closes the panel on pointerdown, which removes the focused

@@ -2068,7 +2068,13 @@ function reveal(g) {
 		if (!main) return;
 		if (g.scope === "collection") {
 			const collection = Zotero.Collections.getByLibraryAndKey(g.libraryID, g.key);
-			if (collection) main.ZoteroPane.collectionsView.selectCollection(collection.id);
+			if (!collection) return;
+			// The collections tree lives in the library pane, so selecting a row
+			// in it is invisible while a reader tab is in front — and since the
+			// links here open books in reader tabs, that is usually where you
+			// are clicking from. Show the pane first, then select.
+			safe(() => main.Zotero_Tabs.select("zotero-pane"));
+			Promise.resolve(main.ZoteroPane.collectionsView.selectCollection(collection.id)).catch(oops);
 		} else {
 			const itemID = Zotero.Items.getIDFromLibraryAndKey(g.libraryID, g.key);
 			if (itemID) openItem(main, itemID);
