@@ -406,11 +406,16 @@ const fakeDoc = () => ({ defaultView: { innerWidth: 900 }, head: node("head"), b
 	createElement: node, getElementById: () => null, querySelectorAll: () => [],
 	addEventListener() {}, removeEventListener() {} });
 
-// Fire a keydown at a field and report whether it was swallowed on the way out.
+// Fire a keydown at a field: was it swallowed on the way out, and was its
+// default action taken away? Both matter — one decides whether the reader sees
+// it, the other whether the editor does.
 const keyed = (f, key, mods = {}) => {
-	let stopped = false;
-	f.listeners.keydown.forEach((fn) => fn(Object.assign({ key, stopPropagation: () => { stopped = true; } }, mods)));
-	return stopped;
+	const out = { stopped: false, prevented: false };
+	const ev = Object.assign({ key, shiftKey: false,
+		stopPropagation: () => { out.stopped = true; },
+		preventDefault: () => { out.prevented = true; } }, mods);
+	f.listeners.keydown.forEach((fn) => fn(ev));
+	return out;
 };
 
 const paneCalls = { select: [], view: [], collection: [], tab: [] };
@@ -538,8 +543,12 @@ assert.ok("height" in editor.style, "sized to its content the moment it opens");
 editor.scrollHeight = 64;
 editor.listeners.input.forEach((fn) => fn());
 assert.strictEqual(editor.style.height, "64px", "and keeps up as it is written");
-assert.strictEqual(keyed(editor, "a", { metaKey: true }), false, "⌘A works in the history window too");
-assert.strictEqual(keyed(editor, "x"), true, "while a plain key stays inside the field");
+// The history window has no single-key shortcuts of its own, so nothing here
+// needs taking off anyone: every key simply reaches the editor.
+assert.strictEqual(keyed(editor, "a", { metaKey: true }).stopped, false, "⌘A works in the history window too");
+assert.strictEqual(keyed(editor, "ArrowLeft").stopped, false, "and so do the caret keys");
+assert.strictEqual(keyed(editor, "x").stopped, false, "with nothing to stay clear of, nothing is swallowed");
+assert.strictEqual(keyed(editor, "Enter").prevented, true, "⏎ still commits the note");
 
 // ↗ opens the book, and only opens it. A selectItem alongside is async, so it
 // lands after the tab has opened and drags the pane back to the library.
@@ -611,10 +620,23 @@ field._border = 0;
 // ⌘A, ⌘Z, ⌘C are the text editor's, and Gecko binds them at the window: a field
 // that swallows every keystroke to keep it off the reader's shortcuts takes
 // them away with it.
-assert.strictEqual(keyed(field, "a", { metaKey: true }), false, "⌘A reaches the editor that implements it");
-assert.strictEqual(keyed(field, "z", { ctrlKey: true }), false, "so does ⌃Z");
-assert.strictEqual(keyed(field, "n"), true, "a plain key is still kept off the reader's shortcuts");
-assert.strictEqual(keyed(field, "Escape"), false, "and Escape still bubbles, to close the panel");
+// Everything the editor implements has to reach it: the accelerators, and the
+// caret keys, which are bound the same way and were swallowed just as silently.
+for (const [key, mods, why] of [
+	["a", { metaKey: true }, "⌘A"], ["z", { ctrlKey: true }, "⌃Z"],
+	["ArrowLeft", {}, "←"], ["ArrowUp", {}, "↑"], ["Home", {}, "Home"],
+	["End", {}, "End"], ["Backspace", {}, "Backspace"], ["PageDown", {}, "PageDown"],
+]) {
+	assert.strictEqual(keyed(field, key, mods).stopped, false, `${why} reaches the editor that implements it`);
+}
+assert.strictEqual(keyed(field, "n").stopped, true, "a bare character is still kept off the reader's shortcuts");
+assert.strictEqual(keyed(field, " ").stopped, true, "space most of all — the reader scrolls on it");
+assert.strictEqual(keyed(field, "Escape").stopped, false, "and Escape still bubbles, to close the panel");
+
+// A textarea would take ⏎ as a second line. The field commits on it instead,
+// the way it did as an input, and leaves ⇧⏎ for a note that wants the break.
+assert.strictEqual(keyed(field, "Enter").prevented, true, "⏎ commits rather than growing the field");
+assert.strictEqual(keyed(field, "Enter", { shiftKey: true }).prevented, false, "⇧⏎ leaves the newline alone");
 assert.ok(field, "a running timer offers a note field");
 field.value = "ch. 3-4, the argument about coinage";
 field.listeners.input.forEach((fn) => fn());

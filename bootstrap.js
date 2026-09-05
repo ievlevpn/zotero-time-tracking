@@ -925,11 +925,13 @@ function el(doc, tag, cls, text) {
 	return e;
 }
 
-// A keystroke the text editor implements for itself: select all, copy, undo.
-// Gecko binds those at the window, so a field that stops key events from
-// bubbling silently takes them away — which is what swallowing every key to
-// keep it off the reader's shortcuts did.
-const accel = (e) => e.metaKey || e.ctrlKey || e.altKey;
+// The only keystroke a field in the reader has to keep to itself: a bare
+// character, which the reader would otherwise take for one of its own
+// single-key shortcuts. Everything else belongs to the text editor — arrows,
+// Home, Backspace, ⌘A, ⌘Z — and Gecko binds those at the window, so a field
+// that stops keys from bubbling silently takes them all away. Swallowing every
+// key to stay clear of the reader is what left the caret unable to move.
+const typed = (e) => e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey;
 
 // A one-line field that gets taller as its text wraps, and never wider. Returns
 // the resizer, because the height has to be taken again whenever the value is
@@ -1138,9 +1140,7 @@ function fillPanel(doc, box, item, reader) {
 	input.type = "text";
 	input.placeholder = "25m, 1h 30m, -10m";
 	input.addEventListener("keydown", (e) => {
-		if (e.key === "Escape") return;  // let it bubble so the panel closes
-		if (accel(e)) return;            // ⌘A, ⌘Z, ⌘C — the editor's own, not ours
-		e.stopPropagation();             // plain keys must not reach reader shortcuts
+		if (typed(e)) e.stopPropagation();   // a bare character is a reader shortcut
 		if (e.key === "Enter") submit();
 	});
 	const addBtn = el(doc, "button", null, "Add");
@@ -1226,10 +1226,12 @@ function fillPanel(doc, box, item, reader) {
 	};
 	noteInput.addEventListener("input", () => { noteDirty = true; });
 	noteInput.addEventListener("keydown", (e) => {
-		if (e.key === "Escape") return;   // let it bubble so the panel closes
-		if (accel(e)) return;             // ⌘A, ⌘Z, ⌘C — the editor's own, not ours
-		e.stopPropagation();              // plain keys must not reach reader shortcuts
-		if (e.key === "Enter") saveNote();
+		if (typed(e)) e.stopPropagation();   // a bare character is a reader shortcut
+		// A textarea takes ⏎ as a second line. This field commits on it, the way
+		// it did as an input, and leaves ⇧⏎ for a note that wants the break.
+		if (e.key !== "Enter" || e.shiftKey) return;
+		e.preventDefault();
+		saveNote();
 	});
 	noteInput.addEventListener("blur", saveNote);
 	noteBox.append(noteInput);
@@ -1276,9 +1278,7 @@ function fillPanel(doc, box, item, reader) {
 	goalBtn.addEventListener("click", () => editing(true));
 	gCancel.addEventListener("click", () => editing(false));
 	gInput.addEventListener("keydown", (e) => {
-		if (e.key === "Escape") return;   // let it bubble so the panel closes
-		if (accel(e)) return;             // ⌘A, ⌘Z, ⌘C — the editor's own, not ours
-		e.stopPropagation();              // plain keys must not reach reader shortcuts
+		if (typed(e)) e.stopPropagation();   // a bare character is a reader shortcut
 		if (e.key === "Enter") gSave.click();
 	});
 	gSave.addEventListener("click", () => safe(() => {
@@ -1334,7 +1334,9 @@ function fillPanel(doc, box, item, reader) {
 			noteInput.value = "";   // the session it belonged to is over and saved
 			noteDirty = false;
 		}
-		else if (!noteDirty) noteInput.value = jotting.note || "";   // never overwrite typing
+		// Never overwrite typing — and never rewrite what is already there, which
+		// a field does not reliably survive with the caret where you left it.
+		else if (!noteDirty && noteInput.value !== (jotting.note || "")) noteInput.value = jotting.note || "";
 		growNote();
 		const tagName = readTag();
 		const isRead = tagName && safe(() => item.hasTag(tagName), false);
@@ -1959,11 +1961,13 @@ function sessionRow(doc, win, r) {
 			input.replaceWith(note);
 			show();
 		};
+		// Nothing to stop here: this window has no single-key shortcuts of its own
+		// to stay clear of, so every key the editor wants simply reaches it.
 		input.addEventListener("keydown", (e) => {
-			if (accel(e)) return;         // ⌘A, ⌘Z, ⌘C — the editor's own, not ours
-			e.stopPropagation();
-			if (e.key === "Enter") close(true);
-			else if (e.key === "Escape") close(false);
+			if (e.key === "Escape") { close(false); return; }
+			if (e.key !== "Enter" || e.shiftKey) return;   // ⇧⏎ leaves a newline
+			e.preventDefault();
+			close(true);
 		});
 		input.addEventListener("blur", () => close(true));
 		note.replaceWith(input);
