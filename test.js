@@ -377,6 +377,12 @@ const node = (tag) => ({ tag, className: "", textContent: "", id: "", title: "",
 	_content: 0,
 	get scrollHeight() { return Math.max(this._content, parseInt(this.style.height, 10) || 0); },
 	set scrollHeight(v) { this._content = v; },
+	// A border-box height has to cover the border, which scrollHeight leaves out.
+	// offsetHeight counts it, clientHeight does not — the gap is what a grower
+	// has to add back, so model both rather than the difference.
+	_border: 0,
+	get clientHeight() { return parseInt(this.style.height, 10) || this._content; },
+	get offsetHeight() { return this.clientHeight + this._border; },
 	append(...c) { for (const x of c) if (x && typeof x === "object") { x.parentElement = this; this.children.push(x); } },
 	insertBefore(n) { n.parentElement = this; this.children.push(n); },
 	replaceChildren(...c) { this.children = []; this.append(...c); },
@@ -399,6 +405,13 @@ const node = (tag) => ({ tag, className: "", textContent: "", id: "", title: "",
 const fakeDoc = () => ({ defaultView: { innerWidth: 900 }, head: node("head"), body: node("body"), title: "",
 	createElement: node, getElementById: () => null, querySelectorAll: () => [],
 	addEventListener() {}, removeEventListener() {} });
+
+// Fire a keydown at a field and report whether it was swallowed on the way out.
+const keyed = (f, key, mods = {}) => {
+	let stopped = false;
+	f.listeners.keydown.forEach((fn) => fn(Object.assign({ key, stopPropagation: () => { stopped = true; } }, mods)));
+	return stopped;
+};
 
 const paneCalls = { select: [], view: [], collection: [], tab: [] };
 global.Zotero.getMainWindow = () => ({ focus() {},
@@ -525,6 +538,8 @@ assert.ok("height" in editor.style, "sized to its content the moment it opens");
 editor.scrollHeight = 64;
 editor.listeners.input.forEach((fn) => fn());
 assert.strictEqual(editor.style.height, "64px", "and keeps up as it is written");
+assert.strictEqual(keyed(editor, "a", { metaKey: true }), false, "⌘A works in the history window too");
+assert.strictEqual(keyed(editor, "x"), true, "while a plain key stays inside the field");
 
 // ↗ opens the book, and only opens it. A selectItem alongside is async, so it
 // lands after the tab has opened and drags the pane back to the library.
@@ -584,6 +599,22 @@ field.scrollHeight = 18;
 field.listeners.input.forEach((fn) => fn());
 assert.strictEqual(field.style.height, "18px", "and back down again when it is deleted");
 assert.strictEqual(field.style.width, undefined, "never sideways");
+// Borders are the field's too. scrollHeight leaves them out, so a height set
+// from it alone overflows by exactly one border — which is a scrollbar down the
+// side of a field that has nothing to scroll.
+field._border = 2;
+field.scrollHeight = 52;
+field.listeners.input.forEach((fn) => fn());
+assert.strictEqual(field.style.height, "54px", "the border is counted, so nothing overflows");
+field._border = 0;
+
+// ⌘A, ⌘Z, ⌘C are the text editor's, and Gecko binds them at the window: a field
+// that swallows every keystroke to keep it off the reader's shortcuts takes
+// them away with it.
+assert.strictEqual(keyed(field, "a", { metaKey: true }), false, "⌘A reaches the editor that implements it");
+assert.strictEqual(keyed(field, "z", { ctrlKey: true }), false, "so does ⌃Z");
+assert.strictEqual(keyed(field, "n"), true, "a plain key is still kept off the reader's shortcuts");
+assert.strictEqual(keyed(field, "Escape"), false, "and Escape still bubbles, to close the panel");
 assert.ok(field, "a running timer offers a note field");
 field.value = "ch. 3-4, the argument about coinage";
 field.listeners.input.forEach((fn) => fn());

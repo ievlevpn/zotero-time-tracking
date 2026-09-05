@@ -925,6 +925,12 @@ function el(doc, tag, cls, text) {
 	return e;
 }
 
+// A keystroke the text editor implements for itself: select all, copy, undo.
+// Gecko binds those at the window, so a field that stops key events from
+// bubbling silently takes them away — which is what swallowing every key to
+// keep it off the reader's shortcuts did.
+const accel = (e) => e.metaKey || e.ctrlKey || e.altKey;
+
 // A one-line field that gets taller as its text wraps, and never wider. Returns
 // the resizer, because the height has to be taken again whenever the value is
 // set from code — typing is not the only way text arrives. Height is cleared
@@ -932,7 +938,11 @@ function el(doc, tag, cls, text) {
 function autoGrow(field) {
 	const fit = () => safe(() => {
 		field.style.height = "auto";
-		field.style.height = field.scrollHeight + "px";
+		// scrollHeight is content plus padding, but box-sizing:border-box means
+		// the height we set has to cover the border too. Leave it out and the
+		// field overflows by exactly one border, which is a scrollbar.
+		const border = field.offsetHeight - field.clientHeight;
+		field.style.height = field.scrollHeight + border + "px";
 	});
 	field.addEventListener("input", fit);
 	return fit;
@@ -1129,7 +1139,8 @@ function fillPanel(doc, box, item, reader) {
 	input.placeholder = "25m, 1h 30m, -10m";
 	input.addEventListener("keydown", (e) => {
 		if (e.key === "Escape") return;  // let it bubble so the panel closes
-		e.stopPropagation();             // keys must not trigger reader shortcuts
+		if (accel(e)) return;            // ⌘A, ⌘Z, ⌘C — the editor's own, not ours
+		e.stopPropagation();             // plain keys must not reach reader shortcuts
 		if (e.key === "Enter") submit();
 	});
 	const addBtn = el(doc, "button", null, "Add");
@@ -1216,7 +1227,8 @@ function fillPanel(doc, box, item, reader) {
 	noteInput.addEventListener("input", () => { noteDirty = true; });
 	noteInput.addEventListener("keydown", (e) => {
 		if (e.key === "Escape") return;   // let it bubble so the panel closes
-		e.stopPropagation();              // keys must not trigger reader shortcuts
+		if (accel(e)) return;             // ⌘A, ⌘Z, ⌘C — the editor's own, not ours
+		e.stopPropagation();              // plain keys must not reach reader shortcuts
 		if (e.key === "Enter") saveNote();
 	});
 	noteInput.addEventListener("blur", saveNote);
@@ -1265,7 +1277,8 @@ function fillPanel(doc, box, item, reader) {
 	gCancel.addEventListener("click", () => editing(false));
 	gInput.addEventListener("keydown", (e) => {
 		if (e.key === "Escape") return;   // let it bubble so the panel closes
-		e.stopPropagation();              // keys must not trigger reader shortcuts
+		if (accel(e)) return;             // ⌘A, ⌘Z, ⌘C — the editor's own, not ours
+		e.stopPropagation();              // plain keys must not reach reader shortcuts
 		if (e.key === "Enter") gSave.click();
 	});
 	gSave.addEventListener("click", () => safe(() => {
@@ -1756,7 +1769,9 @@ h1 { font-size:15px; margin:0; flex:1 0 100%; }  /* its own row inside .top */
 	color:CanvasText; cursor:text; }
 .snote-blank { color:GrayText; opacity:0; }
 .session:hover .snote-blank { opacity:1; }
-.snote-input { flex:1; min-width:0; padding:1px 5px; font:11px/1.5 sans-serif;
+/* border-box, like the popup's: autoGrow adds the border back to a scrollHeight
+   that leaves it out, and that arithmetic only lands on a border-box field. */
+.snote-input { flex:1; min-width:0; box-sizing:border-box; padding:1px 5px; font:11px/1.5 sans-serif;
 	background:Canvas; color:CanvasText; border:1px solid GrayText; border-radius:4px;
 	resize:none; overflow-y:auto; max-height:140px; }
 /* A session whose note has grown is no longer a single line of text, so the
@@ -1945,6 +1960,7 @@ function sessionRow(doc, win, r) {
 			show();
 		};
 		input.addEventListener("keydown", (e) => {
+			if (accel(e)) return;         // ⌘A, ⌘Z, ⌘C — the editor's own, not ours
 			e.stopPropagation();
 			if (e.key === "Enter") close(true);
 			else if (e.key === "Escape") close(false);
