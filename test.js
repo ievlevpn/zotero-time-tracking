@@ -371,6 +371,12 @@ assert.deepStrictEqual([...new Set(logged.map((e) => e.name))].sort(), ["Unloade
 // emptied the day list below its headers. Draw it against a fake DOM instead.
 const node = (tag) => ({ tag, className: "", textContent: "", id: "", title: "", hidden: false,
 	style: {}, dataset: {}, children: [], isConnected: true, parentElement: null,
+	// A real element cannot report a scrollHeight below a height already set on
+	// it, which is the whole reason auto-grow clears the height before reading.
+	// Tests set the content height; the floor is modelled here.
+	_content: 0,
+	get scrollHeight() { return Math.max(this._content, parseInt(this.style.height, 10) || 0); },
+	set scrollHeight(v) { this._content = v; },
 	append(...c) { for (const x of c) if (x && typeof x === "object") { x.parentElement = this; this.children.push(x); } },
 	insertBefore(n) { n.parentElement = this; this.children.push(n); },
 	replaceChildren(...c) { this.children = []; this.append(...c); },
@@ -382,7 +388,14 @@ const node = (tag) => ({ tag, className: "", textContent: "", id: "", title: "",
 		this.parentElement = null;
 		this.isConnected = false;
 	},
-	querySelectorAll: () => [], focus() {}, replaceWith() {} });
+	querySelectorAll: () => [], focus() {},
+	replaceWith(n) {
+		const p = this.parentElement;
+		if (!p) return;
+		p.children = p.children.map((c) => (c === this ? n : c));
+		n.parentElement = p;
+		this.parentElement = null;
+	} });
 const fakeDoc = () => ({ defaultView: { innerWidth: 900 }, head: node("head"), body: node("body"), title: "",
 	createElement: node, getElementById: () => null, querySelectorAll: () => [],
 	addEventListener() {}, removeEventListener() {} });
@@ -497,6 +510,22 @@ assert.strictEqual(notes.length, 2, "every session has a note line");
 assert.ok(notes.some((n) => n.textContent.includes("coinage")), "the written note is shown");
 assert.ok(notes.some((n) => n.className.includes("snote-blank")), "an unwritten one is an invitation, not a blank");
 
+// One line is the right default in a list of sessions, so the rest of a long
+// note is on the tooltip until you click it — and clicking gives you a field
+// that shows the whole thing rather than a slot to scroll sideways in.
+const longNote = notes.find((n) => n.textContent.includes("coinage"));
+assert.strictEqual(longNote.title, "ch. 3-4, the argument about coinage",
+	"the full note is readable without clicking");
+const line = longNote.parentElement;   // the swap clears it, so take it first
+longNote.listeners.click.forEach((fn) => fn({ stopPropagation() {} }));
+const editor = line.children.find((c) => c.tag === "textarea");
+assert.ok(editor, "clicking opens a field that grows with the note");
+assert.strictEqual(editor.value, "ch. 3-4, the argument about coinage", "carrying the note into it");
+assert.ok("height" in editor.style, "sized to its content the moment it opens");
+editor.scrollHeight = 64;
+editor.listeners.input.forEach((fn) => fn());
+assert.strictEqual(editor.style.height, "64px", "and keeps up as it is written");
+
 // ↗ opens the book, and only opens it. A selectItem alongside is async, so it
 // lands after the tab has opened and drags the pane back to the library.
 const arrows = [];
@@ -532,7 +561,7 @@ button.getBoundingClientRect = () => ({ bottom: 20, left: 10 });
 const reader = { itemID: 10 };
 const noteFieldIn = (doc) => {
 	const found = [];
-	const walk = (n) => { if (n.tag === "input") found.push(n); (n.children || []).forEach(walk); };
+	const walk = (n) => { if (n.tag === "input" || n.tag === "textarea") found.push(n); (n.children || []).forEach(walk); };
 	doc.body.children.forEach(walk);
 	return found.find((i) => (i.placeholder || "").includes("Note for this session"));
 };
@@ -544,6 +573,17 @@ const timed = I.log[0];
 let panelDoc = fakeDoc();
 I.openPanel(reader, panelDoc, button);
 let field = noteFieldIn(panelDoc);
+assert.strictEqual(field.tag, "textarea", "the note field wraps rather than scrolling sideways");
+assert.strictEqual(field.rows, 1, "starting at one line");
+// A wrapped note is taller than one line, and the field follows it — downwards
+// only. scrollHeight is what a real layout would report for the wrapped text.
+field.scrollHeight = 52;
+field.listeners.input.forEach((fn) => fn());
+assert.strictEqual(field.style.height, "52px", "and grows to fit what was typed");
+field.scrollHeight = 18;
+field.listeners.input.forEach((fn) => fn());
+assert.strictEqual(field.style.height, "18px", "and back down again when it is deleted");
+assert.strictEqual(field.style.width, undefined, "never sideways");
 assert.ok(field, "a running timer offers a note field");
 field.value = "ch. 3-4, the argument about coinage";
 field.listeners.input.forEach((fn) => fn());

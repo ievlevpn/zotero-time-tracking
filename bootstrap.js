@@ -726,8 +726,12 @@ const CSS = `
 .rt-panel .rt-add button { flex:0 0 auto; }
 .rt-panel .rt-goal { margin-top:8px; }
 .rt-panel .rt-note { margin-top:8px; }
-.rt-panel .rt-note input { width:100%; box-sizing:border-box; padding:4px 6px; font:12px sans-serif;
-	background:Canvas; color:CanvasText; border:1px solid GrayText; border-radius:4px; }
+.rt-panel .rt-note textarea { display:block; width:100%; box-sizing:border-box; padding:4px 6px;
+	font:12px/1.4 sans-serif; background:Canvas; color:CanvasText; border:1px solid GrayText;
+	border-radius:4px;
+	/* Ours to size, and only downwards: no drag handle, no sideways growth, and
+	   a ceiling past which it scrolls rather than eating the whole popup. */
+	resize:none; overflow-y:auto; max-height:96px; }
 .rt-panel .rt-goal .rt-row .rt-muted { flex:1; min-width:0; overflow:hidden;
 	text-overflow:ellipsis; white-space:nowrap; }
 .rt-panel .rt-mark { flex:0 0 auto; font:12px/1 sans-serif; padding:1px 4px; margin-left:2px;
@@ -919,6 +923,19 @@ function el(doc, tag, cls, text) {
 	if (cls) e.className = cls;
 	if (text != null) e.textContent = text;
 	return e;
+}
+
+// A one-line field that gets taller as its text wraps, and never wider. Returns
+// the resizer, because the height has to be taken again whenever the value is
+// set from code — typing is not the only way text arrives. Height is cleared
+// before scrollHeight is read, or it only ever ratchets upwards.
+function autoGrow(field) {
+	const fit = () => safe(() => {
+		field.style.height = "auto";
+		field.style.height = field.scrollHeight + "px";
+	});
+	field.addEventListener("input", fit);
+	return fit;
 }
 
 function togglePanel(reader, doc, btn) {
@@ -1177,9 +1194,12 @@ function fillPanel(doc, box, item, reader) {
 	const notable = () => (timer && timer.id === idOf(item) && timer.row) || null;
 
 	const noteBox = el(doc, "div", "rt-note");
-	const noteInput = doc.createElement("input");
-	noteInput.type = "text";
+	// A textarea, not an input: a note longer than the popup is 260px wide should
+	// wrap into view rather than scroll sideways out of it.
+	const noteInput = doc.createElement("textarea");
+	noteInput.rows = 1;
 	noteInput.placeholder = "📝 Note for this session…";
+	const growNote = autoGrow(noteInput);
 	// Typed-but-uncommitted text, tracked explicitly: the 1 Hz refresh must not
 	// overwrite what is being typed, and relying on activeElement is fragile
 	// once the popup can be torn out from under a focused field.
@@ -1302,6 +1322,7 @@ function fillPanel(doc, box, item, reader) {
 			noteDirty = false;
 		}
 		else if (!noteDirty) noteInput.value = jotting.note || "";   // never overwrite typing
+		growNote();
 		const tagName = readTag();
 		const isRead = tagName && safe(() => item.hasTag(tagName), false);
 		readBtn.textContent = isRead ? `✓ Read` : "✓ Mark as read";
@@ -1735,8 +1756,12 @@ h1 { font-size:15px; margin:0; flex:1 0 100%; }  /* its own row inside .top */
 	color:CanvasText; cursor:text; }
 .snote-blank { color:GrayText; opacity:0; }
 .session:hover .snote-blank { opacity:1; }
-.snote-input { flex:1; min-width:0; padding:1px 5px; font:11px sans-serif;
-	background:Canvas; color:CanvasText; border:1px solid GrayText; border-radius:4px; }
+.snote-input { flex:1; min-width:0; padding:1px 5px; font:11px/1.5 sans-serif;
+	background:Canvas; color:CanvasText; border:1px solid GrayText; border-radius:4px;
+	resize:none; overflow-y:auto; max-height:140px; }
+/* A session whose note has grown is no longer a single line of text, so the
+   time and the buttons sit at the top of it rather than floating mid-note. */
+.session:has(.snote-input) { align-items:flex-start; }
 
 .streak { font-size:12px; color:CanvasText; margin:6px 0 10px; }
 
@@ -1898,13 +1923,19 @@ function sessionRow(doc, win, r) {
 	const show = () => {
 		note.textContent = r.note || "Add a note…";
 		note.className = r.note ? "snote" : "snote snote-blank";
+		// One line is the right default here — a list of sessions should read as
+		// a list — so the rest of a long note lives in the tooltip until clicked.
+		note.title = r.note || "Add a note…";
 	};
 	const edit = () => {
-		const input = doc.createElement("input");
-		input.type = "text";
+		// Editing is where the whole note should be visible, so this grows to fit
+		// rather than making you scroll a one-line box sideways to read it.
+		const input = doc.createElement("textarea");
+		input.rows = 1;
 		input.className = "snote-input";
 		input.value = r.note || "";
 		input.placeholder = "What did you read?";
+		const grow = autoGrow(input);
 		let closed = false;
 		const close = (save) => {
 			if (closed) return;
@@ -1920,6 +1951,7 @@ function sessionRow(doc, win, r) {
 		});
 		input.addEventListener("blur", () => close(true));
 		note.replaceWith(input);
+		grow();
 		input.focus();
 	};
 	note.addEventListener("click", (e) => { e.stopPropagation(); edit(); });
