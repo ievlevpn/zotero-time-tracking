@@ -1673,6 +1673,7 @@ h1 { font-size:15px; margin:0; flex:1 0 100%; }  /* its own row inside .top */
 .item button { font:10px sans-serif; padding:0 5px; border:1px solid transparent;
 	border-radius:4px; background:transparent; color:inherit; cursor:pointer; }
 .item:hover button { border-color:HighlightText; }
+.item button:disabled { opacity:.35; cursor:default; border-color:transparent; }
 .top button, .session button { font:11px sans-serif; padding:2px 8px; border:1px solid GrayText;
 	border-radius:5px; background:transparent; color:CanvasText; cursor:pointer; }
 .top button:hover, .session button:hover { background:Highlight; color:HighlightText; }
@@ -2124,7 +2125,13 @@ function goalRow(doc, win, g, now) {
 	box.append(bar);
 
 	const pace = matches && goalPace(g, done, now);
-	const foot = !matches ? "The item or collection this goal was set on is gone."
+	// Two ways to be orphaned, and they are not the same answer. A collection
+	// that is gone takes its membership with it, so there is no progress left to
+	// report. A deleted book takes nothing: the sessions are still in the log and
+	// the hours were still spent, so the bar above stays honest and only the
+	// name is missing. Only collections were saying anything at all.
+	const foot = !matches ? "The collection this goal was set on is gone."
+		: !name ? `The book this goal was set on is gone · ${fmtTotal(done) || "0m"} still counted`
 		: g.completedAt ? `Marked read ${new Date(g.completedAt).toLocaleDateString()} · ${fmtTotal(done) || "0m"} of ${fmtTotal(g.seconds)}`
 		: pace ? `${fmtTotal(pace.perDay)} a day to finish by ${new Date(g.deadline).toLocaleDateString()}`
 		: ratio >= 1 ? "Done ✓" : `${fmtTotal(g.seconds - done)} to go`;
@@ -2476,12 +2483,20 @@ function buildHistory(win) {
 		for (const e of d.items) {
 			const row = el(doc, "div", "item");
 			const caret = el(doc, "span", "caret", "▸");
-			row.append(caret, el(doc, "span", "t", currentTitle(e) || e.title || "(untitled)"),
+			// null when the item has left the library — the same signal a goal's
+			// title uses. The row keeps the name it was logged under either way.
+			const stillHere = currentTitle(e);
+			row.append(caret, el(doc, "span", "t", stillHere || e.title || "(untitled)"),
 				el(doc, "span", "n", e.sessions + (e.sessions === 1 ? " session" : " sessions")),
 				el(doc, "b", null, fmtTotal(e.seconds) || "0m"));
 			row.title = "Show this day's sessions";
 			const show = el(doc, "button", null, "↗");
-			show.title = "Open this item";
+			// Greyed rather than silently doing nothing: there is nothing to open,
+			// and a button that swallows the click says that far worse than a
+			// button that plainly cannot be pressed.
+			show.disabled = !stillHere;
+			show.title = stillHere ? "Open this item"
+				: "No longer in your library — its time is still counted here";
 			show.addEventListener("click", (ev) => safe(() => {
 				ev.stopPropagation();
 				const itemID = Zotero.Items.getIDFromLibraryAndKey(e.libraryID, e.itemKey);

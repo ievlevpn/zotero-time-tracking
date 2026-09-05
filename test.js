@@ -577,6 +577,31 @@ const titles = [];
 const walkTitles = (n) => { if (n.className === "t") titles.push(n.textContent); (n.children || []).forEach(walkTitles); };
 goneDoc.body.children.forEach(walkTitles);
 assert.deepStrictEqual(titles, ["A Book That Was Deleted"], "the time survives the item");
+// ...and the ↗ beside it is plainly unavailable rather than swallowing the
+// click: there is no item left to open, and the row should say which it is.
+const arrowsGone = [];
+const findGone = (n) => { if (n.textContent === "↗") arrowsGone.push(n); (n.children || []).forEach(findGone); };
+goneDoc.body.children.forEach(findGone);
+assert.strictEqual(arrowsGone.length, 1, "the arrow is still drawn");
+assert.strictEqual(arrowsGone[0].disabled, true, "but disabled, with nothing to open");
+assert.ok(/still counted/.test(arrowsGone[0].title), "and it says the time is kept regardless");
+
+// A goal on that book reports the same thing. Its bar stays honest — the
+// sessions are still in the log — so only the name is missing, which is a
+// different answer from a collection that took its membership with it.
+I.goals.push({ id: "gone1", libraryID: 1, scope: "item", key: "GONE", seconds: 7200, period: "total", updatedAt: 1 });
+const goalGoneDoc = fakeDoc();
+I.setView("goals");
+I.buildHistory({ document: goalGoneDoc });
+const said = [];
+const walkFeet = (n) => { said.push(n.textContent || ""); (n.children || []).forEach(walkFeet); };
+goalGoneDoc.body.children.forEach(walkFeet);
+assert.ok(said.some((t) => /^The book this goal was set on is gone/.test(t)),
+	"a goal on a deleted book says so");
+assert.ok(said.some((t) => /is gone · 20m still counted/.test(t)),
+	"and that the time it measured is still counted");
+I.goals.length = 0;
+I.setView("days");
 global.Zotero.Items.getByLibraryAndKey = resolvable;
 global.Zotero.Items.getIDFromLibraryAndKey = () => 1;
 I.log.length = 0;
