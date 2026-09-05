@@ -193,7 +193,7 @@ assert.strictEqual(goalPace({ ...dated, deadline: today - DAY }, 0, noon), null,
 // edit once deleted refreshViews() and every caller kept "working" — the throw
 // happened after the important part, so nothing looked broken for six releases.
 const { __internals: I } = require("./bootstrap.js");
-const written = [], logged = [];
+const written = [], logged = [], stmts = [];
 const attach = { id: 10, libraryID: 1, key: "ATT", parentID: 1 };
 const book = { id: 1, libraryID: 1, key: "BOOK", isRegularItem: () => true, getDisplayTitle: () => "Book" };
 Object.defineProperty(attach, "parentItem", { get() { return global.Zotero.Items.get(this.parentID); } });
@@ -216,7 +216,11 @@ global.Zotero = {
 global.Components = { classes: {}, interfaces: {} };
 I.setActive(true);
 I.setRegistered("col", "row");   // as startup() would, so refreshViews() has work to do
-I.setDB({ queryAsync: (sql, params) => { written.push(sql.trim().split(/\s+/)[0]); return Promise.resolve([]); } });
+I.setDB({ queryAsync: (sql, params) => {
+	written.push(sql.trim().split(/\s+/)[0]);
+	stmts.push(sql.trim().replace(/\s+/g, " "));
+	return Promise.resolve([]);
+} });
 
 I.start("stopwatch", book);
 assert.ok(I.getTimer(), "timer runs after start");
@@ -283,6 +287,34 @@ assert.strictEqual(overnight.seconds, 1800, "never back on the old row");
 assert.strictEqual(I.log.length, 2, "one cut per midnight, not one per tick");
 I.stop();
 assert.strictEqual(I.log.length, 2, "stopping keeps both halves");
+
+// A pause carried across midnight leaves a row stamped 00:00 that nothing has
+// happened in yet — resuming is when that row really starts. Without this the
+// day list reports a session beginning at midnight that began after lunch.
+I.log.length = 0;
+I.start("stopwatch", book);
+I.getTimer().row.started = startOfDay(Date.now()) - 3600e3;
+I.getTimer().counted = 1800;
+I.setPaused(true);
+I.splitAtMidnight();
+assert.strictEqual(I.log[1].started, startOfDay(Date.now()), "midnight opens the next row at the boundary");
+assert.strictEqual(I.log[1].seconds, 0, "with nothing in it yet");
+const beforeResume = Date.now();
+I.setPaused(false);
+assert.ok(I.log[1].started >= beforeResume, "resuming stamps it at the resume, not at midnight");
+assert.ok(stmts.some((q) => /^UPDATE sessions SET .*\bstarted\b/.test(q)),
+	"and the new start is written, not only held in memory");
+
+// A row that already has time is a sitting that really did begin when it says.
+// Backdated by a measurable amount, so an unconditional restamp cannot pass by
+// landing on the same millisecond it was captured in.
+I.getTimer().counted = 1800 + 600;
+I.tick();
+const began = I.log[1].started = beforeResume - 5000;
+I.setPaused(true);
+I.setPaused(false);
+assert.strictEqual(I.log[1].started, began, "a row with time in it keeps the start it had");
+I.stop();
 
 // Sessions logged before the cut existed get the same treatment on startup,
 // worked out from what a row actually records: when it began and how long it

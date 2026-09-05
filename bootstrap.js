@@ -357,8 +357,8 @@ const API = {
 
 function saveRow(row) {
 	if (!db) return;   // nothing to write to; the in-memory log still has it
-	db.queryAsync("UPDATE sessions SET seconds = ?, title = ?, note = ? WHERE id = ?",
-		[row.seconds, row.title, row.note || null, row.id]).catch(oops);
+	db.queryAsync("UPDATE sessions SET seconds = ?, started = ?, title = ?, note = ? WHERE id = ?",
+		[row.seconds, row.started, row.title, row.note || null, row.id]).catch(oops);
 }
 
 // Upsert: the unique index makes "set a goal" replace the one already on that
@@ -540,6 +540,10 @@ function setPaused(paused) {
 	if (!timer) return;   // stopped between the paint that drew the button and the click
 	absorb();
 	timer.running = !paused;
+	// Midnight opens a row whether or not anything is running, so a pause carried
+	// across one leaves a row stamped 00:00 that nothing has happened in yet.
+	// Resuming is when that row really starts; until then it has no time to move.
+	if (!paused && !timer.row.seconds) timer.row.started = Date.now();
 	timer.segStart = Date.now();
 	saveRow(timer.row);
 	paint();
