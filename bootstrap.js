@@ -34,6 +34,7 @@ const DAY_PAGE = 30;      // days the history lists at once, and per "Show more"
 const ORPHAN_EVERY = 5;   // seconds between "is the book still open?" checks
 const MAX_STEP = 5;       // seconds; longer gaps mean the machine slept
 const MIN_SESSION = 60;   // seconds; anything shorter is a misclick, not reading
+const GOALS_SHOWN = 3;    // goals on an item's popup before the rest fold away
 const DAY = 86400000;
 
 let active = false;       // between startup() and shutdown()
@@ -725,6 +726,8 @@ const CSS = `
 .rt-panel .rt-add input { flex:1; min-width:0; box-sizing:border-box; padding:4px 6px; font:12px sans-serif; }
 .rt-panel .rt-add button { flex:0 0 auto; }
 .rt-panel .rt-goal { margin-top:8px; }
+.rt-panel .rt-moregoals { display:block; width:100%; margin-top:6px;
+	font-size:11px; color:GrayText; }
 .rt-panel .rt-note { margin-top:8px; }
 .rt-panel .rt-note textarea { display:block; width:100%; box-sizing:border-box; padding:4px 6px;
 	font:12px/1.4 sans-serif; background:Canvas; color:CanvasText; border:1px solid GrayText;
@@ -1168,9 +1171,11 @@ function fillPanel(doc, box, item, reader) {
 	};
 
 	// Goals covering this item. Membership is resolved once, here — not on every
-	// repaint — and only the two most specific are shown; the popup is 260px.
-	const mine = goalsFor(item).slice(0, 2);
-	const bars = mine.map((g) => {
+	// repaint. The popup is 260px, so only the most specific few are on show and
+	// the rest are a click away: built either way, because hiding a row is
+	// cheaper than rebuilding the panel to reveal it.
+	const mine = goalsFor(item);
+	const bars = mine.map((g, i) => {
 		const wrap = el(doc, "div", "rt-goal");
 		const head = el(doc, "div", "rt-row");
 		const label = el(doc, "span", "rt-muted");
@@ -1195,9 +1200,23 @@ function fillPanel(doc, box, item, reader) {
 			wrap.style.cursor = "pointer";
 			wrap.addEventListener("click", () => editing(true));
 		}
+		wrap.hidden = i >= GOALS_SHOWN;
 		box.insertBefore(wrap, add);
-		return { g, label, value, fill, mark };
+		return { g, wrap, label, value, fill, mark };
 	});
+
+	if (mine.length > GOALS_SHOWN) {
+		const hidden = mine.length - GOALS_SHOWN;
+		const moreGoals = el(doc, "button", "rt-moregoals");
+		let open = false;
+		const applyFold = () => {
+			bars.forEach((b, i) => { b.wrap.hidden = !open && i >= GOALS_SHOWN; });
+			moreGoals.textContent = open ? "Fewer goals" : `＋${hidden} more goal${hidden === 1 ? "" : "s"}`;
+		};
+		moreGoals.addEventListener("click", () => safe(() => { open = !open; applyFold(); }));
+		applyFold();
+		box.insertBefore(moreGoals, add);
+	}
 
 	// The note belongs to the session being timed and to nothing else. Stopping
 	// commits it and empties the field, so what is on screen is always the note

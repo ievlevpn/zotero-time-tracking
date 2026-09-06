@@ -657,6 +657,39 @@ assert.strictEqual(field.value, "", "and empties the field");
 assert.ok(field.parentElement.hidden, "which has no session left to attach to");
 I.closePanel();
 
+// Five goals can cover one book — its own for each period, plus its
+// collections' and a library-wide one — and 260px does not hold five progress
+// bars. The most specific few are on show and the rest fold behind a button.
+I.goals.length = 0;
+for (const [id, period] of [["m1", "total"], ["m2", "day"], ["m3", "week"], ["m4", "month"]]) {
+	I.goals.push({ id, libraryID: 1, scope: "item", key: "BOOK", seconds: 3600, period, updatedAt: 1 });
+}
+panelDoc = fakeDoc();
+I.openPanel(reader, panelDoc, button);
+const goalBars = () => panelDoc.body.children[0].children.filter((c) => (c.className || "") === "rt-goal");
+const moreBtn = () => panelDoc.body.children[0].children.find((c) => (c.className || "") === "rt-moregoals");
+assert.strictEqual(goalBars().length, 4, "every goal is built, so revealing one costs no rebuild");
+assert.deepStrictEqual(goalBars().map((b) => b.hidden), [false, false, false, true],
+	"but only the first three are on show");
+assert.ok(moreBtn(), "the rest are behind a button");
+assert.strictEqual(moreBtn().textContent, "＋1 more goal", "which says how many, and counts singular");
+moreBtn().listeners.click.forEach((fn) => fn());
+assert.deepStrictEqual(goalBars().map((b) => b.hidden), [false, false, false, false], "clicking shows them all");
+assert.strictEqual(moreBtn().textContent, "Fewer goals", "and offers the way back");
+moreBtn().listeners.click.forEach((fn) => fn());
+assert.deepStrictEqual(goalBars().map((b) => b.hidden), [false, false, false, true], "which folds them again");
+I.closePanel();
+
+// Three or fewer need no button at all.
+I.goals.pop();
+panelDoc = fakeDoc();
+I.openPanel(reader, panelDoc, button);
+assert.strictEqual(goalBars().length, 3, "three goals all show");
+assert.deepStrictEqual(goalBars().map((b) => b.hidden), [false, false, false], "with none folded away");
+assert.strictEqual(moreBtn(), undefined, "and nothing to unfold");
+I.closePanel();
+I.goals.length = 0;
+
 // --- a PDF that gains a parent hands over its time -------------------------
 I.log.length = 0;
 I.goals.length = 0;
