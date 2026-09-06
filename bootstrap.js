@@ -726,8 +726,8 @@ const CSS = `
 .rt-panel .rt-add input { flex:1; min-width:0; box-sizing:border-box; padding:4px 6px; font:12px sans-serif; }
 .rt-panel .rt-add button { flex:0 0 auto; }
 .rt-panel .rt-goal { margin-top:8px; }
-.rt-panel .rt-moregoals { display:block; width:100%; margin-top:6px;
-	font-size:11px; color:GrayText; }
+.rt-panel .rt-moregoals { margin-top:6px; font-size:11px; color:GrayText; cursor:pointer; }
+.rt-panel .rt-moregoals:hover { color:CanvasText; text-decoration:underline; }
 .rt-panel .rt-note { margin-top:8px; }
 .rt-panel .rt-note textarea { display:block; width:100%; box-sizing:border-box; padding:4px 6px;
 	font:12px/1.4 sans-serif; background:Canvas; color:CanvasText; border:1px solid GrayText;
@@ -1207,11 +1207,15 @@ function fillPanel(doc, box, item, reader) {
 
 	if (mine.length > GOALS_SHOWN) {
 		const hidden = mine.length - GOALS_SHOWN;
-		const moreGoals = el(doc, "button", "rt-moregoals");
+		// Quiet text, not a button: this is a way to look at the panel, not one of
+		// the things the panel does. The same weight the history window gives its
+		// own aside.
+		const moreGoals = el(doc, "div", "rt-moregoals");
+		moreGoals.title = "Every goal covering this book";
 		let open = false;
 		const applyFold = () => {
 			bars.forEach((b, i) => { b.wrap.hidden = !open && i >= GOALS_SHOWN; });
-			moreGoals.textContent = open ? "Fewer goals" : `＋${hidden} more goal${hidden === 1 ? "" : "s"}`;
+			moreGoals.textContent = open ? "▴ Fewer goals" : `▾ ${hidden} more goal${hidden === 1 ? "" : "s"}`;
 		};
 		moreGoals.addEventListener("click", () => safe(() => { open = !open; applyFold(); }));
 		applyFold();

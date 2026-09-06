@@ -671,11 +671,12 @@ const moreBtn = () => panelDoc.body.children[0].children.find((c) => (c.classNam
 assert.strictEqual(goalBars().length, 4, "every goal is built, so revealing one costs no rebuild");
 assert.deepStrictEqual(goalBars().map((b) => b.hidden), [false, false, false, true],
 	"but only the first three are on show");
-assert.ok(moreBtn(), "the rest are behind a button");
-assert.strictEqual(moreBtn().textContent, "＋1 more goal", "which says how many, and counts singular");
+assert.ok(moreBtn(), "the rest are behind a line of quiet text");
+assert.strictEqual(moreBtn().tag, "div", "text, not a button — this is a way to look, not a thing to do");
+assert.strictEqual(moreBtn().textContent, "▾ 1 more goal", "which says how many, and counts singular");
 moreBtn().listeners.click.forEach((fn) => fn());
 assert.deepStrictEqual(goalBars().map((b) => b.hidden), [false, false, false, false], "clicking shows them all");
-assert.strictEqual(moreBtn().textContent, "Fewer goals", "and offers the way back");
+assert.strictEqual(moreBtn().textContent, "▴ Fewer goals", "and offers the way back");
 moreBtn().listeners.click.forEach((fn) => fn());
 assert.deepStrictEqual(goalBars().map((b) => b.hidden), [false, false, false, true], "which folds them again");
 I.closePanel();
