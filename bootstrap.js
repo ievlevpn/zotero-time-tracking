@@ -356,8 +356,16 @@ const API = {
 	},
 };
 
+// Most saves have nothing new in them: the row is rewritten on a timer, on
+// every pause, and on every blur of the note field — none of which mean the row
+// changed. What was last written is kept on the row itself, under a name that
+// is not one of COLS and so never reaches SQL, and a save that would change
+// nothing is simply not made.
 function saveRow(row) {
 	if (!db) return;   // nothing to write to; the in-memory log still has it
+	const written = [row.seconds, row.started, row.title, row.note || null].join("\u0000");
+	if (row.saved === written) return;
+	row.saved = written;
 	db.queryAsync("UPDATE sessions SET seconds = ?, started = ?, title = ?, note = ? WHERE id = ?",
 		[row.seconds, row.started, row.title, row.note || null, row.id]).catch(oops);
 }
@@ -2770,7 +2778,7 @@ if (typeof module !== "undefined") {
 	// is what catches an edit that quietly deletes a function everything calls.
 	module.exports.__internals = {
 		start, stop, tick, paint, setPaused, nextPhase, checkOrphaned, buildHistory, openPanel, closePanel,
-		reparentRows, splitOldOvernights, idFor, readerOpenFor, adoptOpenNotes, shutdown, log, goals, bars,
+		reparentRows, splitOldOvernights, saveRow, idFor, readerOpenFor, adoptOpenNotes, shutdown, log, goals, bars,
 		setView: (v) => { historyView = v; },
 		setPick: (v) => { goalPick = v; },
 		toggleRead, autoMini, reveal,

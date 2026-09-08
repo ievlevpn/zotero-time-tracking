@@ -263,6 +263,28 @@ assert.strictEqual(I.log[0].seconds, 120, "with its time intact");
 assert.ok(refreshes > 0, "the column and item pane get refreshed");
 assert.ok(written.includes("UPDATE"), "the final duration is written");
 
+// A row is rewritten on a timer, on every pause, and on every blur of the note
+// field — almost none of which mean anything changed. A save that would write
+// the same row again is not made at all.
+const repeat = { id: "r1", libraryID: 1, itemKey: "BOOK", title: "A Book", mode: "stopwatch",
+	started: Date.now(), seconds: 600, note: null };
+I.log.push(repeat);
+written.length = 0;
+I.saveRow(repeat);
+assert.deepStrictEqual(written, ["UPDATE"], "the first save is written");
+I.saveRow(repeat);
+I.saveRow(repeat);
+assert.deepStrictEqual(written, ["UPDATE"], "saving the same row again writes nothing");
+repeat.seconds = 660;
+I.saveRow(repeat);
+assert.deepStrictEqual(written, ["UPDATE", "UPDATE"], "a real change still is");
+repeat.note = "picked it up again";
+I.saveRow(repeat);
+assert.strictEqual(written.length, 3, "and so is a note");
+assert.ok("saved" in repeat, "the record of what was written lives on the row");
+assert.ok(!stmts.some((q) => /\bsaved\b/.test(q)), "and never reaches SQL as a column");
+I.log.pop();
+
 // Reading through midnight files the sitting under both days: the row so far is
 // closed at the boundary and a new one opens there. Backdating the running row
 // is what the clock does at 00:00, without having to wait until 00:00 to find
