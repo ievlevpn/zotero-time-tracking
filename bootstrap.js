@@ -1360,15 +1360,21 @@ function fillPanel(doc, box, item, reader) {
 			}
 		}
 		const jotting = notable();
+		// While the caret is in it the field is the reader's, not the refresh's.
+		// Rewriting its value or re-measuring its height once a second puts the
+		// caret back at the end, which is indistinguishable from the arrow keys
+		// and ⌘A doing nothing: you press ←, it moves, and a tick later it is
+		// back where it was. Typing looks fine throughout, because typing happens
+		// at the end anyway. Nothing here is urgent enough to interrupt someone
+		// mid-sentence — it can all wait for the blur.
+		const held = safe(() => doc.activeElement === noteInput, false);
 		noteBox.hidden = !jotting;
 		if (!jotting) {
 			noteInput.value = "";   // the session it belonged to is over and saved
 			noteDirty = false;
 		}
-		// Never overwrite typing — and never rewrite what is already there, which
-		// a field does not reliably survive with the caret where you left it.
-		else if (!noteDirty && noteInput.value !== (jotting.note || "")) noteInput.value = jotting.note || "";
-		growNote();
+		else if (!held && !noteDirty && noteInput.value !== (jotting.note || "")) noteInput.value = jotting.note || "";
+		if (!held) growNote();
 		const tagName = readTag();
 		const isRead = tagName && safe(() => item.hasTag(tagName), false);
 		readBtn.textContent = isRead ? `✓ Read` : "✓ Mark as read";

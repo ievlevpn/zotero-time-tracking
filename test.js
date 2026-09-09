@@ -426,6 +426,7 @@ const node = (tag) => ({ tag, className: "", textContent: "", id: "", title: "",
 	} });
 const fakeDoc = () => ({ defaultView: { innerWidth: 900 }, head: node("head"), body: node("body"), title: "",
 	createElement: node, getElementById: () => null, querySelectorAll: () => [],
+	activeElement: null,   // whatever the caret is in, which the refresh must leave alone
 	addEventListener() {}, removeEventListener() {} });
 
 // Fire a keydown at a field: was it swallowed on the way out, and was its
@@ -659,6 +660,24 @@ assert.strictEqual(keyed(field, "Escape").stopped, false, "and Escape still bubb
 // the way it did as an input, and leaves ⇧⏎ for a note that wants the break.
 assert.strictEqual(keyed(field, "Enter").prevented, true, "⏎ commits rather than growing the field");
 assert.strictEqual(keyed(field, "Enter", { shiftKey: true }).prevented, false, "⇧⏎ leaves the newline alone");
+
+// The 1 Hz refresh must not touch a field the caret is in. Rewriting its value
+// or re-measuring its height puts the caret back at the end, which is exactly
+// what "the arrow keys do nothing" looks like: ← moves, a tick later it is back.
+// Typing hides it, because typing happens at the end anyway.
+timed.note = "ch. 3";                 // saved trimmed, so the field can differ
+field.value = "ch. 3 ";               // ...by a trailing space, and often will
+field.style.height = "";
+panelDoc.activeElement = field;
+I.paint();
+assert.strictEqual(field.value, "ch. 3 ", "a focused field keeps what is in it");
+assert.strictEqual(field.style.height, "", "and is not re-measured under the caret");
+panelDoc.activeElement = null;
+I.paint();
+assert.strictEqual(field.value, "ch. 3", "once the caret leaves, it catches up");
+assert.ok(field.style.height, "and takes its height again");
+timed.note = null;
+field.value = "";
 assert.ok(field, "a running timer offers a note field");
 field.value = "ch. 3-4, the argument about coinage";
 field.listeners.input.forEach((fn) => fn());
