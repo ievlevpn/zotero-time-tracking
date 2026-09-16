@@ -16,7 +16,9 @@ popup with three ways to log time on the item you're reading:
   break, with a chime and a notification at each switch; breaks don't count
   toward reading time. The length can still be adjusted mid-run, and is
   remembered in `extensions.zotero.readingTime.focusMin`.
-- **Manual entry** — type `25`, `1h 30m`, `45s`, or `-10` to subtract.
+- **Manual entry** — type `25`, `1h 30m`, `45s`, or `-10` to subtract. The
+  line under the box says which day it lands on: click it to file the time
+  against a day you read but forgot to track.
 - **✓ Mark as read** — tags the item in Zotero and nothing else: no goal, no
   session, no bookkeeping. Click it again to take the tag off. It uses the same
   tag as goals do, asking for one the first time.

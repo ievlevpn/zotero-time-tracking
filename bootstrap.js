@@ -704,6 +704,26 @@ const isMine = (item) => !!(timer && item && timer.id === idOf(item));
 
 // --- toolbar ---------------------------------------------------------------
 
+// The calendar, drawn the same in both windows — Firefox's own panel can't be
+// styled, so this is ours, and there is no reason to have two of it. The day
+// and nav cells carry their own class rather than being selected as bare
+// buttons: each window already styles `button`, and a class outranks that
+// wherever this sheet happens to land in the order.
+const CAL_CSS = `
+.cal { position:absolute; top:calc(100% + 4px); left:0; z-index:10; padding:8px;
+	background:Canvas; color:CanvasText; border:1px solid GrayText; border-radius:6px;
+	box-shadow:0 4px 14px rgba(0,0,0,.25); }
+.cal-head { display:flex; align-items:center; gap:4px; margin-bottom:6px; font-size:12px; }
+.cal-head .m { flex:1; text-align:center; white-space:nowrap; }
+.cal-grid { display:grid; grid-template-columns:repeat(7, 24px); gap:2px; }
+.cal-grid span { font-size:9px; color:GrayText; text-align:center; }
+.cal .d, .cal .n { flex:0 0 auto; width:24px; height:22px; font:11px sans-serif; padding:0;
+	border:1px solid transparent; border-radius:4px; background:transparent; color:CanvasText; cursor:pointer; }
+.cal .d:hover:not(:disabled), .cal .n:hover:not(:disabled) { background:Highlight; color:HighlightText; }
+.cal .d.on { font-weight:700; background:var(--l1, transparent); }   /* days with reading on them */
+.cal .d:disabled, .cal .n:disabled { color:GrayText; opacity:.45; cursor:default; }
+`;
+
 const CSS = `
 /* The live time rides inside the button, so the toolbar's fixed-size grid
    doesn't wrap it onto a second row. */
@@ -736,6 +756,10 @@ const CSS = `
 .rt-panel .rt-goal { margin-top:8px; }
 .rt-panel .rt-moregoals { margin-top:6px; font-size:11px; color:GrayText; cursor:pointer; }
 .rt-panel .rt-moregoals:hover { color:CanvasText; text-decoration:underline; }
+.rt-panel .rt-when { position:relative; margin-top:4px; }
+.rt-panel .rt-when .day { font-size:11px; color:GrayText; cursor:pointer; }
+.rt-panel .rt-when .day:hover { color:CanvasText; text-decoration:underline; }
+${CAL_CSS}
 .rt-panel .rt-note { margin-top:8px; }
 .rt-panel .rt-note textarea { display:block; width:100%; box-sizing:border-box; padding:4px 6px;
 	font:12px/1.4 sans-serif; background:Canvas; color:CanvasText; border:1px solid GrayText;
@@ -1157,17 +1181,47 @@ function fillPanel(doc, box, item, reader) {
 	const addBtn = el(doc, "button", null, "Add");
 	addBtn.addEventListener("click", () => submit());
 	add.append(input, addBtn);
+
+	// Time typed in by hand is not always time spent just now: "I read this
+	// yesterday and forgot to start the clock" is the whole reason to type it.
+	// So the day sits under the amount, quiet until it is not today, and opens
+	// the same calendar the history window uses.
+	// ponytail: a year back is as far as the picker pages. Widen the floor if
+	// anyone ever wants to import a shelf's worth of history by hand.
+	let when = Date.now();
+	const whenWrap = el(doc, "div", "rt-when");
+	const whenDay = el(doc, "div", "day");
+	const drawWhen = () => {
+		whenDay.textContent = "▾ " + dayLabel(startOfDay(when));
+		whenDay.title = "Which day this time belongs to";
+	};
+	const whenCal = dayCalendar(doc, whenWrap, {
+		floor: startOfDay(Date.now() - 365 * DAY),
+		ceil: startOfDay(Date.now()),
+		// Midday, not midnight: nobody knows the hour any more, and the middle of
+		// the day cannot be read as the edge of the one before it.
+		pick: (day) => { when = day + 12 * 3600e3; drawWhen(); },
+	});
+	whenDay.addEventListener("click", whenCal.toggle);
+	drawWhen();
+	whenWrap.append(whenDay);
+
 	const more = el(doc, "button", null, "📊 History for this item…");
 	more.style.marginTop = "8px";
 	more.addEventListener("click", () => { closePanel(); openHistory(itemFilter(item)); });
-	box.append(add, more);
+	box.append(add, whenWrap, more);
 
 	// Manual time is just another row in the log — negative to subtract.
 	const submit = () => {
 		const delta = parseDuration(input.value);
 		if (!delta) return;
 		input.value = "";
-		addRow(item, "manual", delta);
+		addRow(item, "manual", delta, when);
+		// Back to today. A day that stayed picked would silently misfile whatever
+		// was typed next, and nothing on screen would be obviously wrong.
+		when = Date.now();
+		drawWhen();
+		whenCal.close();
 		paint();
 		refreshViews();
 	};
@@ -1841,19 +1895,8 @@ i[data-l="4"] { background:var(--l4); }
 .hm-cols i[data-l] { cursor:pointer; }
 .hm-cols i.blank { background:transparent; }
 
-/* date picker — Firefox's own panel can't be styled, so this is ours */
-.cal { position:absolute; top:calc(100% + 4px); right:0; z-index:10; padding:8px;
-	background:Canvas; color:CanvasText; border:1px solid GrayText; border-radius:6px;
-	box-shadow:0 4px 14px rgba(0,0,0,.25); }
-.cal-head { display:flex; align-items:center; gap:4px; margin-bottom:6px; font-size:12px; }
-.cal-head .m { flex:1; text-align:center; white-space:nowrap; }
-.cal-grid { display:grid; grid-template-columns:repeat(7, 24px); gap:2px; }
-.cal-grid span { font-size:9px; color:GrayText; text-align:center; }
-.top .cal button { font:11px sans-serif; height:22px; padding:0;
-	border:1px solid transparent; border-radius:4px; background:transparent; color:CanvasText; cursor:pointer; }
-.top .cal button:hover:not(:disabled) { background:Highlight; color:HighlightText; }
-.top .cal button.on { font-weight:700; background:var(--l1); }   /* days with reading on them */
-.top .cal button:disabled { color:GrayText; opacity:.45; cursor:default; }
+${CAL_CSS}
+.jump .cal { left:auto; right:0; }   /* hangs off the right edge of the window */
 `;
 
 let historyWin = null;
@@ -2427,15 +2470,14 @@ function showDay(win, day) {
 
 // A month grid under the button. Firefox's native date panel can't be styled
 // and looked like a visitor from another program, so this draws its own.
-function dayPicker(doc, win, days) {
-	const wrap = el(doc, "div", "jump");
-	const btn = el(doc, "button", null, "\u{1F4C5}");
-	btn.title = "Jump to a date";
-	const has = new Set(days.map((d) => d.day));
-	const today = startOfDay(Date.now());
-	const oldest = days.length ? days[days.length - 1].day : today;
+// A month grid that hangs under whatever opens it. Two places want one — jump
+// to a day you read, and say which day some time you are typing in belongs to —
+// and neither wants Firefox's own panel, which cannot be styled. So the drawing
+// lives here once and the differences are arguments: what can be picked, what
+// is worth marking, and what picking does. `wrap` must be position:relative.
+function dayCalendar(doc, wrap, { floor, ceil, mark, pick }) {
 	const monthOf = (ms) => { const d = new Date(ms); return new Date(d.getFullYear(), d.getMonth(), 1); };
-	let cal = null, month = monthOf(today);
+	let cal = null, month = monthOf(ceil);
 
 	const away = (ev) => { if (!wrap.contains(ev.target)) close(); };
 	const esc = (ev) => { if (ev.key === "Escape") close(); };
@@ -2451,9 +2493,9 @@ function dayPicker(doc, win, days) {
 		close();
 		cal = el(doc, "div", "cal");
 		const step = (by) => () => safe(() => { month.setMonth(month.getMonth() + by); draw(); });
-		const back = el(doc, "button", null, "‹"), fwd = el(doc, "button", null, "›");
-		back.disabled = month <= monthOf(oldest);
-		fwd.disabled = month >= monthOf(today);
+		const back = el(doc, "button", "n", "\u2039"), fwd = el(doc, "button", "n", "\u203a");
+		back.disabled = month <= monthOf(floor);
+		fwd.disabled = month >= monthOf(ceil);
 		back.addEventListener("click", step(-1));
 		fwd.addEventListener("click", step(1));
 		cal.append(el(doc, "div", "cal-head"));
@@ -2467,10 +2509,11 @@ function dayPicker(doc, win, days) {
 		const last = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
 		for (let n = 1; n <= last; n++) {
 			const day = new Date(month.getFullYear(), month.getMonth(), n).getTime();
-			const cell = el(doc, "button", has.has(day) ? "on" : null, String(n));
-			cell.disabled = day > today || day < oldest;   // nothing logged out there to jump to
-			if (has.has(day)) cell.title = "Read on this day";
-			cell.addEventListener("click", () => { close(); safe(() => showDay(win, day)); });
+			const note = mark && mark(day);
+			const cell = el(doc, "button", note ? "d on" : "d", String(n));
+			cell.disabled = day > ceil || day < floor;
+			if (note) cell.title = note;
+			cell.addEventListener("click", () => { close(); safe(() => pick(day)); });
 			grid.append(cell);
 		}
 		cal.append(grid);
@@ -2479,7 +2522,23 @@ function dayPicker(doc, win, days) {
 		doc.addEventListener("keydown", esc);
 	}
 
-	btn.addEventListener("click", () => safe(() => (cal ? close() : draw())));
+	return { toggle: () => safe(() => (cal ? close() : draw())), close };
+}
+
+// The history window's own: jump to a day, and only to one with reading on it.
+function dayPicker(doc, win, days) {
+	const wrap = el(doc, "div", "jump");
+	const btn = el(doc, "button", null, "\u{1F4C5}");
+	btn.title = "Jump to a date";
+	const has = new Set(days.map((d) => d.day));
+	const today = startOfDay(Date.now());
+	const cal = dayCalendar(doc, wrap, {
+		floor: days.length ? days[days.length - 1].day : today,   // nothing logged further back
+		ceil: today,
+		mark: (day) => (has.has(day) ? "Read on this day" : null),
+		pick: (day) => showDay(win, day),
+	});
+	btn.addEventListener("click", cal.toggle);
 	wrap.append(btn);
 	return wrap;
 }

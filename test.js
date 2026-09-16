@@ -405,6 +405,7 @@ const node = (tag) => ({ tag, className: "", textContent: "", id: "", title: "",
 	_border: 0,
 	get clientHeight() { return parseInt(this.style.height, 10) || this._content; },
 	get offsetHeight() { return this.clientHeight + this._border; },
+	get firstChild() { return this.children[0] || null; },
 	append(...c) { for (const x of c) if (x && typeof x === "object") { x.parentElement = this; this.children.push(x); } },
 	insertBefore(n) { n.parentElement = this; this.children.push(n); },
 	replaceChildren(...c) { this.children = []; this.append(...c); },
@@ -566,6 +567,29 @@ assert.ok("height" in editor.style, "sized to its content the moment it opens");
 editor.scrollHeight = 64;
 editor.listeners.input.forEach((fn) => fn());
 assert.strictEqual(editor.style.height, "64px", "and keeps up as it is written");
+
+// The same calendar serves this window, configured the other way: it jumps to a
+// day, and only to one with reading on it. Worth holding down, because the
+// drawing is now shared with the popup's "which day did I read this?".
+const everywhere = (n, out = []) => { out.push(n); (n.children || []).forEach((c) => everywhere(c, out)); return out; };
+const all = doc.body.children.flatMap((c) => everywhere(c));
+const jump = all.find((n) => n.title === "Jump to a date");
+assert.ok(jump, "the history window still offers the picker");
+jump.listeners.click.forEach((fn) => fn());
+const jumpCells = doc.body.children.flatMap((c) => everywhere(c)).filter((n) => (n.className || "").startsWith("d") && n.tag === "button");
+assert.ok(jumpCells.length >= 28, "which opens a month");
+const readDays = jumpCells.filter((c) => (c.className || "").includes("on"));
+assert.strictEqual(readDays.length, 2, "with the two days that have reading marked");
+assert.ok(readDays.every((c) => c.title === "Read on this day"), "and saying so");
+// Only the span that actually has reading in it can be jumped to: the floor is
+// the oldest logged day, not the start of the calendar. Counted rather than
+// spot-checked, so a floor that quietly disappears cannot hide behind the
+// future days the ceiling disables anyway.
+const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0);
+const from = Math.max(Math.min(...I.log.map((r) => startOfDay(r.started))), monthStart.getTime());
+const reachable = Math.round((startOfDay(Date.now()) - from) / DAY) + 1;
+assert.strictEqual(jumpCells.filter((c) => !c.disabled).length, reachable,
+	"days outside the logged span cannot be jumped to");
 // The history window has no single-key shortcuts of its own, so nothing here
 // needs taking off anyone: every key simply reaches the editor.
 assert.strictEqual(keyed(editor, "a", { metaKey: true }).stopped, false, "⌘A works in the history window too");
@@ -731,6 +755,46 @@ assert.deepStrictEqual(goalBars().map((b) => b.hidden), [false, false, false], "
 assert.strictEqual(moreBtn(), undefined, "and nothing to unfold");
 I.closePanel();
 I.goals.length = 0;
+
+// Time you forgot to track belongs to the day you read, not the day you type
+// it in. The day sits under the amount and opens the same calendar the history
+// window draws — one implementation, two callers.
+I.log.length = 0;
+panelDoc = fakeDoc();
+I.openPanel(reader, panelDoc, button);
+const dig2 = (n, out = []) => { out.push(n); (n.children || []).forEach((c) => dig2(c, out)); return out; };
+const inPanel = () => dig2(panelDoc.body.children[0]);
+const dayLine = () => inPanel().find((n) => (n.className || "") === "day");
+const amount = () => inPanel().find((n) => (n.placeholder || "").includes("1h 30m"));
+assert.ok(dayLine(), "the add row says which day it will file under");
+assert.strictEqual(dayLine().textContent, "▾ Today", "today until said otherwise");
+
+// Open the calendar and take yesterday.
+dayLine().listeners.click.forEach((fn) => fn());
+const dayCells = inPanel().filter((n) => (n.className || "").startsWith("d") && n.tag === "button");
+assert.ok(dayCells.length >= 28, "a month of days to choose from");
+const yesterday = startOfDay(Date.now() - DAY);
+const wanted = dayCells.find((c) => c.textContent === String(new Date(yesterday).getDate()));
+wanted.listeners.click.forEach((fn) => fn());
+assert.strictEqual(dayLine().textContent, "▾ Yesterday", "and it says so once picked");
+
+amount().value = "45m";
+amount().listeners.keydown.forEach((fn) => fn({ key: "Enter", stopPropagation() {}, preventDefault() {} }));
+assert.strictEqual(I.log.length, 1, "the entry is logged");
+assert.strictEqual(I.log[0].seconds, 2700, "for as long as was typed");
+assert.strictEqual(I.log[0].mode, "manual", "as time entered by hand");
+assert.strictEqual(startOfDay(I.log[0].started), yesterday, "filed under the day it was read");
+assert.ok(new Date(I.log[0].started).getHours() === 12,
+	"at midday — the hour is unknown, and the middle of a day is not the edge of another");
+
+// A picked day must not stick: the next entry would be misfiled and nothing on
+// screen would look wrong.
+assert.strictEqual(dayLine().textContent, "▾ Today", "and the day goes back to today");
+amount().value = "10m";
+amount().listeners.keydown.forEach((fn) => fn({ key: "Enter", stopPropagation() {}, preventDefault() {} }));
+assert.strictEqual(startOfDay(I.log[1].started), startOfDay(Date.now()), "so the next one lands today");
+I.closePanel();
+I.log.length = 0;
 
 // --- a PDF that gains a parent hands over its time -------------------------
 I.log.length = 0;
