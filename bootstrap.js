@@ -721,6 +721,9 @@ const CAL_CSS = `
 	border:1px solid transparent; border-radius:4px; background:transparent; color:CanvasText; cursor:pointer; }
 .cal .d:hover:not(:disabled), .cal .n:hover:not(:disabled) { background:Highlight; color:HighlightText; }
 .cal .d.on { font-weight:700; background:var(--l1, transparent); }   /* days with reading on them */
+/* Today: a ring on the border the cell already reserves, so nothing shifts and
+   it still reads as today under a marked day's background and under hover. */
+.cal .d.today { border-color:Highlight; font-weight:700; }
 .cal .d:disabled, .cal .n:disabled { color:GrayText; opacity:.45; cursor:default; }
 `;
 
@@ -2507,12 +2510,15 @@ function dayCalendar(doc, wrap, { floor, ceil, mark, pick }) {
 		const lead = (new Date(month.getFullYear(), month.getMonth(), 1).getDay() + 6) % 7;  // Monday first
 		for (let i = 0; i < lead; i++) grid.append(el(doc, "span"));
 		const last = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
+		// Read the clock on every draw, not once when the picker was built: a
+		// window left open overnight should ring the new day, not the old one.
+		const today = startOfDay(Date.now());
 		for (let n = 1; n <= last; n++) {
 			const day = new Date(month.getFullYear(), month.getMonth(), n).getTime();
 			const note = mark && mark(day);
-			const cell = el(doc, "button", note ? "d on" : "d", String(n));
+			const cell = el(doc, "button", (note ? "d on" : "d") + (day === today ? " today" : ""), String(n));
 			cell.disabled = day > ceil || day < floor;
-			if (note) cell.title = note;
+			if (note || day === today) cell.title = [day === today ? "Today" : null, note].filter(Boolean).join(" \u2014 ");
 			cell.addEventListener("click", () => { close(); safe(() => pick(day)); });
 			grid.append(cell);
 		}

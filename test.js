@@ -580,7 +580,13 @@ const jumpCells = doc.body.children.flatMap((c) => everywhere(c)).filter((n) => 
 assert.ok(jumpCells.length >= 28, "which opens a month");
 const readDays = jumpCells.filter((c) => (c.className || "").includes("on"));
 assert.strictEqual(readDays.length, 2, "with the two days that have reading marked");
-assert.ok(readDays.every((c) => c.title === "Read on this day"), "and saying so");
+assert.ok(readDays.every((c) => c.title.endsWith("Read on this day")), "and saying so");
+// Today is ringed wherever the calendar is drawn, so the grid has a fixed point
+// to read the rest of the month against.
+const todayCells = jumpCells.filter((c) => (c.className || "").split(" ").includes("today"));
+assert.strictEqual(todayCells.length, 1, "exactly one cell is today");
+assert.strictEqual(todayCells[0].textContent, String(new Date().getDate()), "and it is the right one");
+assert.ok(todayCells[0].title.startsWith("Today"), "saying so on the way past");
 // Only the span that actually has reading in it can be jumped to: the floor is
 // the oldest logged day, not the start of the calendar. Counted rather than
 // spot-checked, so a floor that quietly disappears cannot hide behind the
