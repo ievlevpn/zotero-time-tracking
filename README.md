@@ -1,8 +1,8 @@
 # Reading Time (Zotero plugin)
 
-Built for **Zotero 10**. It uses plugin APIs that arrived across the 7.x line —
+Built for **Zotero 10 and 11**. It uses plugin APIs that arrived across the 7.x line —
 reader toolbar events, custom item-tree columns, item-pane info rows, and the
-menu API — and is only tested against 10.
+menu API — and is checked against 10 and 11.
 
 ![The history window: totals, a year of reading as a heatmap, and every day's sessions](docs/history.png)
 
@@ -229,8 +229,8 @@ comparator sorts a pre-release suffix *below* the plain number — so a minimum 
 `"10.0"` would lock the plugin out of every Zotero 10 beta. The `.999` idiom is
 the same one Zotero's own plugin templates used for the 7.0 betas.
 
-`strict_max_version` is `"10.*"`, so the plugin will need a look before it runs
-on Zotero 11.
+`strict_max_version` is `"11.*"`, so the plugin will need a look before it runs
+on Zotero 12.
 
 ## Install (dev)
 
